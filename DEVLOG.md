@@ -42,6 +42,77 @@
 
 `Add isolated M0 voxel light and dither spike`
 
+## 2026-11-16 — M0 HUD correction and visual evidence
+
+### Done
+
+- Changed the crosshair readout to sample the last AIR cell before the first solid ray hit, so the readout reports the illuminated air volume.
+- Added a solid observation floor in the camera bay so the primary view aims into AIR immediately above it.
+- Added `debug/capture_m0.gd`, a repeatable capture helper for the isolated test scene. It saves 854×480 images and exercises the existing L-key light-move action.
+- Captured the AIR dither/HUD view, three chunk-border views, a same-view before/after light-move pair, and a separate HUD view in `debug/evidence/`.
+
+### Verified
+
+- Godot 4.7.2 reports nonzero `LIGHT_LEVEL 12` for AIR at `(13, 15, 14)` in the primary screenshot; HUD also shows `GLOOM_LEVEL`.
+- Before/after images show the same view with changed dither lighting and the source marker moved from `(15, 15, 15)` to `(8, 15, 12)` after the L-key action.
+- All seven saved screenshots are 854×480. Three border-angle screenshots are distinct views.
+- The five-run timing criterion remains PASS: median 1.661 ms and max 2.356 ms. The meaningful budget is the amortized cost of up to two chunks in a frame against the 20 ms worst-case frame budget; a single-chunk timing in isolation does not establish that combined frame cost.
+- No SubViewport is present; the light test scene inherits the project-settings root viewport.
+
+### Broken / not verified
+
+- Do not mark M0 passed yet: four clearly distinguishable Bayer bands and fog visibility are not confirmed; the captures alone do not conclusively prove no seam from all three angles; live-window integer scaling is unverified.
+
+### Next
+
+- Complete those visual checks, then update M0 verdict. M1 remains blocked on M0 acceptance.
+
+### Files changed
+
+- `scripts/debug/lighttest.gd`
+- `debug/lighttest.tscn`
+- `debug/capture_m0.gd`
+- `debug/evidence/m0_01_dither_air_crosshair.png`
+- `debug/evidence/m0_02_border_west.png`
+- `debug/evidence/m0_03_border_upper_angle.png`
+- `debug/evidence/m0_04_border_lower_angle.png`
+- `debug/evidence/m0_05_light_before.png`
+- `debug/evidence/m0_06_light_after.png`
+- `debug/evidence/m0_07_debug_hud.png`
+- `STATE.md`
+- `DEVLOG.md`
+
+### Commit message
+
+`Verify M0 light HUD and capture visual evidence`
+
+M0 verdict: OPEN — four-band/fog appearance, conclusive three-angle seam check, and live-window integer scaling remain unverified.
+
+## 2026-11-16 — M0 accepted
+
+### Confirmed
+
+- Inspected `debug/evidence/m0_01_dither_air_crosshair.png`: its HUD reads `LIGHT_LEVEL 12 | GLOOM_LEVEL 0.00 | block air at (13, 15, 14)`. The crosshair sample is the AIR cell immediately before the wall hit, so the primary dither capture has the requested nonzero light value.
+- Confirmed the 2569 us and 3191 us values came from screenshot capture runs with capture/render overhead. They are not part of the clean five-run timing set. The accepted five-run result remains 1.620, 1.641, 1.661, 1.783, and 2.356 ms (median 1.661 ms, max 2.356 ms), meeting median <3 ms and max <4 ms.
+- Human visual review accepted the dither (five distinct wall bands), integer scaling/letterboxing in a resized window, and seam visibility (no brightness step across the chunk border at the supplied angles).
+
+### Status
+
+- M0 acceptance criteria are met. M1 is unblocked.
+- Fog visibility was not separately assessed; it was not a listed M2 acceptance bullet.
+- No Git commands were run.
+
+### Files changed
+
+- `STATE.md`
+- `DEVLOG.md`
+
+### Commit message
+
+`Accept M0 light and dither spike`
+
+M0 verdict: PASS — AIR HUD value, clean five-run timing, five dither bands, integer scaling, and chunk-border seam accepted.
+
 ## 2026-11-16 — Engine and timing criteria correction
 
 ### Done
@@ -64,6 +135,31 @@ Amortized frame cost is the relevant budget because two chunks may update in one
 ### M0 verdict
 
 OPEN — engine version unresolved; AIR crosshair readout, three-angle chunk-border seam, visible light-movement propagation, and HUD screenshot remain unverified on the chosen engine. Five-run timing also remains unverified on that engine.
+
+## 2026-11-16 — Pinned stack confirmed and timing accepted
+
+### Done
+
+- Read the updated `BIBLE.md` PIN THE STACK: Godot 4.7.2 stable, API docs target 4.7, and APIs newer than 4.7.2 are out of scope. Exact installed version was previously confirmed as `4.7.2.stable.official.ed1daf0bf`.
+- Confirmed `debug/lighttest.tscn` has no SubViewport node. `project.godot` sets the root viewport to 854×480 with viewport stretch, keep aspect, and integer scale.
+- Marked the supplied five-run timing result PASS: values 1.620, 1.641, 1.661, 1.783, 2.356 ms; median 1.661 ms (<3 ms), max 2.356 ms (<4 ms). Stop optimizing.
+
+Amortized frame cost is the correct measure because two chunk updates can be scheduled in one frame; their combined CPU work must fit inside the worst-case 20 ms frame budget alongside the rest of that frame. A single per-chunk microsecond threshold does not express that actual frame-level constraint.
+
+### Verified / blocked
+
+- Existing screenshot shows patterned walls, but requested evidence remains incomplete. The current HUD samples only the first solid ray hit; it cannot display the light level of an AIR cell. Consequently the AIR crosshair artifact needs a small HUD sampling change or a narrower interpretation. That source change is outside the current instruction to update STATE.md and DEVLOG.md only, so no code was changed and visual capture work is paused pending direction.
+- No SubViewport deviation exists; nothing needs removal in M1.
+- No Git commands were run.
+
+### Files changed
+
+- `STATE.md`
+- `DEVLOG.md`
+
+### M0 verdict
+
+OPEN — AIR crosshair readout, three-angle chunk-border seam, visible light-movement propagation, and requested debug HUD screenshot remain unverified.
 
 ## 2026-11-16 — M0 checkpoint after Git initialization
 
@@ -99,3 +195,120 @@ OPEN — engine version unresolved; AIR crosshair readout, three-angle chunk-bor
 
 `Add isolated M0 voxel light and dither spike`
 
+
+## 2026-11-16 — M2 isolated gate evidence
+
+### Done
+
+- Prepared an automated isolated M2 check for the expected light table, chunk-border continuity, AIR crosshair HUD, and five-run propagation timing.
+- Captured a fresh set of 854×480 Compatibility-rendered M2 images: one AIR/dither view, three chunk-border views, before/after source movement, and a debug HUD view.
+- Locked the flashlight implementation choice from the approved plan: propagate a voxel cone into the integer light buffer so rendered darkness, HUD LIGHT_LEVEL, and gameplay queries use the same value.
+
+### Verified
+
+- Godot 4.7.2 automated test passed all air, mycelium, and pale-bloom light values at distances 1–15.
+- Automated values across the x=15/16 chunk boundary matched the expected propagated light.
+- The primary capture reports `LIGHT_LEVEL 12 | GLOOM_LEVEL 0.00 | block air at (13, 15, 14)`.
+- Five full padded chunk runs were 1182, 1184, 1184, 1190, and 1252 µs; median 1184 µs, max 1252 µs. Both revised criteria pass (<3 ms median, <4 ms max).
+- Light movement was captured before and after using the existing L-key action; both images use the same view and show different illumination.
+
+### Gate / not yet verified
+
+- M2 visual evidence is ready for human review. Main-world M2 integration has not started, respecting the requirement that the isolated M2 acceptance pass first.
+- Human acceptance of four distinct Bayer bands and no visible seam in the three current border-angle captures remains pending.
+- The GDScript helper uses the M0 light test implementation; this checkpoint did not touch the main-world code or change light propagation.
+- Environment-only root certificate-store warning remains present in Godot command-line output.
+- No Git commands were run.
+
+### Files changed
+
+- `debug/m2_acceptance_test.gd`
+- `debug/capture_m2.gd`
+- `debug/m2_evidence/m2_01_dither_air_crosshair.png`
+- `debug/m2_evidence/m2_02_border_west.png`
+- `debug/m2_evidence/m2_03_border_upper_angle.png`
+- `debug/m2_evidence/m2_04_border_lower_angle.png`
+- `debug/m2_evidence/m2_05_light_before.png`
+- `debug/m2_evidence/m2_06_light_after.png`
+- `debug/m2_evidence/m2_07_debug_hud.png`
+- `STATE.md`
+- `DEVLOG.md`
+
+### Commit message
+
+`Add isolated M2 light and dither acceptance evidence`
+
+M2 isolated verdict: OPEN — automated table, border-light continuity, AIR HUD, and timing checks pass; awaiting human visual acceptance before main-world integration.
+## M2 flashlight performance correction
+
+The flashlight decision is revised per the user's explicit performance direction: static sources (torches, crystals) use voxel propagation and are baked into chunk vertex colors; the dynamic player flashlight is computed in the Bayer fragment shader from position/direction uniforms. Looking around updates shared shader parameters only and must never mark chunks dirty or rebuild meshes. This supersedes the earlier mistaken proposal to propagate the flashlight cone.
+
+The approved isolated M2 gate remains in force: validate the dynamic shader behavior in `debug/lighttest.tscn`; do not touch the main world until the user accepts the isolated evidence. No main-world files have been changed for M2.
+## 2026-11-16 — Dynamic flashlight shader implementation
+
+### Done
+
+- Applied the performance correction: static voxel lights remain in baked vertex alpha; the moving flashlight now uses world-position and direction uniforms in `light_dither.gdshader` and contributes in the fragment shader before Bayer band quantization.
+- Updated the isolated light test to refresh those two uniforms as the camera moves. No mesh rebuild is called by the flashlight update.
+- Added an automated check that moves/rotates the camera, verifies the shader uniforms changed, and verifies the mesh-build generation counter did not change.
+- Regenerated all seven M2 captures with the dynamic flashlight active in the dither shader.
+
+### Verified
+
+- Headless M2 acceptance test passes: light table, chunk-border continuity, AIR HUD, dynamic flashlight uniform update without remesh, and five-run chunk propagation timing.
+- Latest five timing runs: 1262, 1271, 1371, 1375, 1677 µs; median 1371 µs, max 1677 µs, within the revised thresholds.
+- Graphical Compatibility capture run on the RX 6600 compiled and rendered the updated shader with no shader errors. Captures are 854×480; the AIR screenshot reads LIGHT_LEVEL 12.
+
+### Gate
+
+- Main-world integration remains untouched until human M2 visual acceptance of the current dither and three border-angle captures.
+- The flashlight adds light based on camera position/direction, cone angle, and range in the shader. Static source movement continues to use voxel propagation and chunk remeshing.
+- Environment-only root certificate-store warning remains in Godot console output. No Git commands were run.
+
+### Files changed
+
+- `shaders/light_dither.gdshader`
+- `scripts/debug/lighttest.gd`
+- `debug/m2_acceptance_test.gd`
+- `debug/capture_m2.gd`
+- Seven updated PNGs in `debug/m2_evidence/`
+- `STATE.md`
+- `DEVLOG.md`
+
+### Commit message
+
+`Keep flashlight dynamic in M2 Bayer shader`
+
+M2 isolated verdict: OPEN — automated checks pass; waiting for human visual acceptance before main-world integration.
+## 2026-11-16 — M2 main-world acceptance and capture
+
+### Done
+
+- Recorded the user's M2 acceptance and official PASS verdict.
+- Added `debug/capture_main_m2.gd` to boot the real main scene, wait for generation, light baking, and meshing, aim at the generated torch, update the shader flashlight uniforms, and capture the rendered root viewport.
+- Captured `debug/m2_evidence/main_world_torch_flashlight.png` at 854×480. The screenshot shows the torch, flashlight-lit dithered terrain, crosshair, and debug HUD.
+
+### Verified
+
+- Godot 4.7.2 Compatibility renderer completed the capture with 256/256 chunks generated, lit, and meshed; one torch and 47 static light sources were present.
+- The main-world light initialization timing log reported median 2738 µs and max 19154 µs with one chunk processed per frame. This is a main-world initialization measurement, not the accepted isolated five-run timing verdict (median 1371 µs, max 1677 µs).
+- Startup emitted a >20 ms frame streak warning during generation in the capture run. The user's M2 functional/visual acceptance remains recorded as PASS; this capture does not claim a separate startup frame-budget pass.
+
+### Broken / not verified
+
+- No new M2 acceptance items remain open per user review. Startup frame timing during this capture was not part of the M2 user acceptance.
+
+### Next
+
+- M3 plan: Lumencaster cartridge swapping, mining hitscan and Gloom noise, Lumen reserve recharge/fire gating, and 4×4×4 Projector Mode. No code until user approves the plan.
+
+### Files changed
+
+- `STATE.md`
+- `DEVLOG.md`
+- `debug/capture_main_m2.gd`
+- `debug/m2_evidence/main_world_torch_flashlight.png`
+
+### Commit message
+
+`Record accepted M2 main-world integration`

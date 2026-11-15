@@ -29,7 +29,7 @@ environment = SubResource("Environment_lighttest")
 [node name="Readout" type="Label" parent="HUD"]
 offset_left = 12.0
 offset_top = 10.0
-offset_right = 500.0
+offset_right = 842.0
 offset_bottom = 102.0
 theme_override_colors/font_color = Color(0.8, 0.95, 0.9, 1)
 text = "M0 LIGHT TEST"

@@ -6,3 +6,6 @@ Godot_*.exe
 
 # Movie Maker sidecar audio
 *.wav
+# Local Godot test user data
+.m1_test_userdata/
+.m2_userdata/

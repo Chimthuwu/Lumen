@@ -27,6 +27,7 @@ var chunk_root: Node3D
 var world_material: ShaderMaterial
 var debug_visible := true
 var mouse_captured := true
+var mesh_build_generation := 0
 
 
 func _ready() -> void:
@@ -57,6 +58,7 @@ func _input(event: InputEvent) -> void:
 
 func _process(delta: float) -> void:
 	_move_camera(delta)
+	_update_flashlight_uniforms()
 	_update_readout()
 
 
@@ -108,6 +110,10 @@ func _build_test_world() -> void:
 		for y in range(12, 19):
 			for z in range(12, 19):
 				_set_block(Vector3i(x, y, z), BLOCK_AIR)
+	# Solid observation floor puts the crosshair AIR sample one cell above it.
+	for x in range(8, 14):
+		for z in range(12, 19):
+			_set_block(Vector3i(x, 14, z), BLOCK_TEST_WALL)
 	_set_block(Vector3i(14, 15, 15), BLOCK_AIR)
 	_set_block(source_cell, BLOCK_AIR)
 	for distance in range(1, LIGHT_RANGE + 1):
@@ -124,6 +130,19 @@ func _create_render_nodes() -> void:
 	world_material = ShaderMaterial.new()
 	world_material.shader = shader
 	world_material.set_shader_parameter("dither_bands", 6.0)
+	world_material.set_shader_parameter("flashlight_enabled", true)
+	world_material.set_shader_parameter("flashlight_range", 12.0)
+	world_material.set_shader_parameter("flashlight_inner_cos", 0.94)
+	world_material.set_shader_parameter("flashlight_outer_cos", 0.82)
+	world_material.set_shader_parameter("flashlight_intensity", 0.85)
+	_update_flashlight_uniforms()
+
+
+func _update_flashlight_uniforms() -> void:
+	if not is_instance_valid(camera) or not is_instance_valid(world_material):
+		return
+	world_material.set_shader_parameter("flashlight_position", camera.global_position)
+	world_material.set_shader_parameter("flashlight_direction", -camera.global_basis.z)
 
 
 func _move_light_to_view() -> void:
@@ -246,6 +265,7 @@ func _run_light_table_check() -> void:
 
 
 func _build_chunk_meshes() -> void:
+	mesh_build_generation += 1
 	for child in chunk_root.get_children():
 		child.free()
 	for cz in range(WORLD_SIZE / CHUNK_SIZE):
@@ -332,22 +352,27 @@ func _update_readout() -> void:
 	var ray_origin := camera.project_ray_origin(viewport_center)
 	var ray_direction := camera.project_ray_normal(viewport_center)
 	var hit := Vector3i(-1, -1, -1)
+	var last_air := Vector3i(-1, -1, -1)
 	for step_index in range(1, 301):
 		var point := ray_origin + ray_direction * (float(step_index) * 0.1)
 		var cell := Vector3i(floori(point.x), floori(point.y), floori(point.z))
-		if _inside_world(cell) and _block_at(cell) != BLOCK_AIR:
+		if not _inside_world(cell):
+			break
+		if _block_at(cell) != BLOCK_AIR:
 			hit = cell
 			break
+		last_air = cell
+	var sample_cell := last_air if _inside_world(last_air) else hit
 	var block_label := "none"
 	var level := 0
 	var gloom := 0.0
-	if _inside_world(hit):
-		block_label = String(block_defs[_block_at(hit)].block_id)
-		level = _light_at(hit)
-		gloom = float(gloom_levels[_index(hit)])
+	if _inside_world(sample_cell):
+		block_label = String(block_defs[_block_at(sample_cell)].block_id)
+		level = _light_at(sample_cell)
+		gloom = float(gloom_levels[_index(sample_cell)])
 	readout.text = "M0 LIGHT + DITHER | FPS %.0f | camera free\n" % Engine.get_frames_per_second()
-	readout.text += "LIGHT_LEVEL %d | GLOOM_LEVEL %.2f | block %s\n" % [level, gloom, block_label]
-	readout.text += "L: move/place light at view +4 | WASD: fly | Space/Ctrl: rise/fall | F: hide readout | Esc: mouse"
+	readout.text += "LIGHT_LEVEL %d | GLOOM_LEVEL %.2f | block %s at %s\n" % [level, gloom, block_label, str(sample_cell)]
+	readout.text += "L: move static torch | flashlight follows camera | WASD move | Space/Ctrl fly | F HUD | Esc mouse"
 
 
 func _set_block(cell: Vector3i, block_id: int) -> void:
