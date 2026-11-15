@@ -1,0 +1,8 @@
+# Godot-generated files
+.godot/
+
+# Local engine binaries
+Godot_*.exe
+
+# Movie Maker sidecar audio
+*.wav
