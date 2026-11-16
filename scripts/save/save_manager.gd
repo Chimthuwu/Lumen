@@ -7,7 +7,7 @@ const BLOCKS_FILE := "blocks.bin"
 const METADATA_FILE := "metadata.json"
 
 
-static func save_world(world: Node, player_position: Vector3) -> bool:
+static func save_world(world: Node, player_position: Vector3, extra_metadata: Dictionary = {}) -> bool:
 	var save_dir := "user://worlds/%d" % world.world_seed
 	var dir_error := DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(save_dir))
 	if dir_error != OK:
@@ -28,7 +28,8 @@ static func save_world(world: Node, player_position: Vector3) -> bool:
 		"player_position": [player_position.x, player_position.y, player_position.z],
 		"cradle_state": {},
 		"inventory": {},
-		"player_stats": {}
+		"player_stats": {},
+		"m4": extra_metadata
 	}
 	var metadata_file := FileAccess.open(save_dir.path_join(METADATA_FILE), FileAccess.WRITE)
 	if metadata_file == null:

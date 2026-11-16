@@ -13,6 +13,9 @@ func configure(coords: Vector3i, origin: Vector3, material: Material) -> void:
 	mesh_instance = MeshInstance3D.new()
 	mesh_instance.name = "Mesh"
 	mesh_instance.material_override = material
+	# Terrain receives the directional shadow map but must not cast into it:
+	# self-shadowing a heightfield made of unshaded cubes produces acne bands.
+	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mesh_instance)
 	static_body = StaticBody3D.new()
 	static_body.name = "Collision"
@@ -24,7 +27,7 @@ func configure(coords: Vector3i, origin: Vector3, material: Material) -> void:
 	static_body.add_child(collision_shape)
 
 
-func install_geometry(vertices: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray) -> void:
+func install_geometry(vertices: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray, uv2: PackedVector2Array) -> void:
 	if vertices.is_empty():
 		mesh_instance.mesh = null
 		collision_shape.shape = null
@@ -34,6 +37,7 @@ func install_geometry(vertices: PackedVector3Array, normals: PackedVector3Array,
 	arrays[Mesh.ARRAY_VERTEX] = vertices
 	arrays[Mesh.ARRAY_NORMAL] = normals
 	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_TEX_UV2] = uv2
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	mesh_instance.mesh = mesh

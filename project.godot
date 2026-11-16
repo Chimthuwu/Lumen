@@ -76,6 +76,18 @@ load_world={
 "deadzone": 0.2,
 "events": [Object(InputEventKey,"physical_keycode":74)]
 }
+debug_spawn_gloomlings={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"physical_keycode":4194337)]
+}
+debug_spawn_lamp_eater={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"physical_keycode":4194338)]
+}
+debug_local_gloom={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"physical_keycode":4194339)]
+}
 mode_switch={
 "deadzone": 0.2,
 "events": [Object(InputEventKey,"physical_keycode":81)]
@@ -88,7 +100,19 @@ interact={
 "deadzone": 0.2,
 "events": [Object(InputEventKey,"physical_keycode":69)]
 }
+toggle_flashlight={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"physical_keycode":84)]
+}
 
+cartridge_next={
+"deadzone": 0.2,
+"events": [Object(InputEventMouseButton,"button_index":5)]
+}
+cartridge_prev={
+"deadzone": 0.2,
+"events": [Object(InputEventMouseButton,"button_index":4)]
+}
 [physics]
 
 3d/physics_engine="GodotPhysics3D"
@@ -100,3 +124,5 @@ renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/default_filters/use_nearest_mipmap_filter=false
 anti_aliasing/quality/msaa_3d=0
+viewport/hdr_2d=true
+environment/defaults/default_clear_color=Color(0, 0, 0, 1)

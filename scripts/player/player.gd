@@ -17,6 +17,8 @@ var velocity := Vector3.ZERO
 var on_floor := false
 var fixed_accumulator := 0.0
 var spawned := false
+var health := 100.0
+var damage_cooldown := 0.0
 var axis_collided := PackedByteArray([0, 0, 0])
 
 
@@ -25,6 +27,7 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	damage_cooldown = maxf(0.0, damage_cooldown - delta)
 	if not spawned:
 		if world.is_generated:
 			var spawn_height: int = world.get_surface_height(64, 64)
@@ -45,12 +48,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		rotation.y -= event.relative.x * LOOK_SENSITIVITY
 		camera.rotation.x = clampf(camera.rotation.x - event.relative.y * LOOK_SENSITIVITY, -1.52, 1.52)
-	elif event.is_action_pressed("pause_mouse"):
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED else Input.MOUSE_MODE_CAPTURED
-	elif event.is_action_pressed("break_block"):
-		_break_target_block()
-	elif event.is_action_pressed("place_block"):
-		_place_target_block()
+
 
 
 func _simulate_fixed_step(delta: float) -> void:
@@ -170,3 +168,10 @@ func _player_overlaps_cell(cell: Vector3i) -> bool:
 	var min_player := center - PLAYER_HALF_EXTENTS
 	var max_player := center + PLAYER_HALF_EXTENTS
 	return max_player.x > cell.x and min_player.x < cell.x + 1 and max_player.y > cell.y and min_player.y < cell.y + 1 and max_player.z > cell.z and min_player.z < cell.z + 1
+
+
+func take_damage(amount: float) -> void:
+	if damage_cooldown > 0.0 or amount <= 0.0:
+		return
+	health = maxf(0.0, health - amount)
+	damage_cooldown = 0.7
