@@ -33,7 +33,11 @@ const BLOCK_RESOURCE_PATHS := [
 	"res://data/blocks/pale_bloom.tres",
 	"res://data/blocks/rotted_dirt.tres",
 	"res://data/blocks/rotted_ashen_soil.tres",
-	"res://data/blocks/dead_wood.tres"
+	"res://data/blocks/dead_wood.tres",
+	"res://data/blocks/beacon.tres",
+	"res://data/blocks/pale_wood.tres",
+	"res://data/blocks/hush_soil.tres",
+	"res://data/blocks/canyon_gravel.tres"
 ]
 const Generator = preload("res://scripts/world/world_generator.gd")
 const VegetationScript = preload("res://scripts/world/vegetation.gd")
@@ -135,7 +139,7 @@ func _ready() -> void:
 	var maps: Dictionary = Generator.build_maps(world_seed)
 	heights = maps["heights"]
 	biome_map = maps["biome_map"]
-	tree_sites = Generator.collect_tree_sites(world_seed, heights)
+	tree_sites = Generator.collect_tree_sites(world_seed, heights, biome_map)
 	sun_light = get_parent().get_node_or_null("DirectionalLight3D") as DirectionalLight3D
 	vegetation = VegetationScript.new()
 	vegetation.name = "Vegetation"
@@ -169,6 +173,8 @@ func _load_block_palette() -> void:
 	world_material.set_shader_parameter("flashlight_intensity", FLASHLIGHT_INTENSITY)
 	world_material.set_shader_parameter("ambient_sky_level", ambient_sky_level)
 	world_material.set_shader_parameter("sun_strength", 0.0)
+	world_material.set_shader_parameter("detail_texture", _create_detail_texture())
+	world_material.set_shader_parameter("detail_strength", 0.8)
 	for path in BLOCK_RESOURCE_PATHS:
 		var definition := load(path) as BlockLightDef
 		if definition == null:
@@ -185,13 +191,42 @@ func _load_block_palette() -> void:
 		if definition.block_id == &"air":
 			air_id = block_index
 	fixture_ids.clear()
-	for fixture in [&"torch", &"pale_bloom", &"mycelium"]:
+	for fixture in [&"torch", &"pale_bloom", &"mycelium", &"lumen_crystal", &"beacon"]:
 		if block_ids.has(fixture):
 			fixture_ids[int(block_ids[fixture])] = fixture
 	emissive_ids.clear()
 	for index in range(block_defs.size()):
 		if block_defs[index].emitted_light > 0:
 			emissive_ids[index] = true
+
+func _create_detail_texture() -> ImageTexture:
+	# One tile per world unit. The dark border becomes grout at block seams;
+	# the interior carries pixel grain, speckles and hairline cracks.
+	var size := 64
+	var image := Image.create(size, size, false, Image.FORMAT_RGB8)
+	var noise := FastNoiseLite.new()
+	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	noise.seed = 4471
+	noise.frequency = 0.11
+	noise.fractal_octaves = 3
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 771
+	for y in range(size):
+		for x in range(size):
+			var value := 0.86 + noise.get_noise_2d(float(x), float(y)) * 0.16
+			if rng.randf() < 0.06:
+				value -= 0.14
+			if absf(noise.get_noise_2d(float(x) * 2.7, float(y) * 2.7)) < 0.04:
+				value *= 0.76
+			var edge := minf(minf(float(x), float(size - 1 - x)), minf(float(y), float(size - 1 - y)))
+			if edge < 2.0:
+				value *= 0.56
+			elif edge < 4.0:
+				value *= 0.86
+			value = clampf(value, 0.0, 1.0)
+			image.set_pixel(x, y, Color(value, value, value))
+	return ImageTexture.create_from_image(image)
+
 
 func _create_chunk_nodes() -> void:
 	chunk_nodes.resize(CHUNK_COUNT)
@@ -226,7 +261,7 @@ func _active_generation_count() -> int:
 
 
 func _generate_chunk_task(chunk_index: int) -> void:
-	var generated := Generator.generate_chunk(chunk_index, world_seed, heights, block_ids, tree_sites)
+	var generated := Generator.generate_chunk(chunk_index, world_seed, heights, block_ids, tree_sites, biome_map)
 	worker_mutex.lock()
 	generation_results[chunk_index] = generated
 	worker_mutex.unlock()
@@ -247,7 +282,7 @@ func _process_generation() -> void:
 		generated_chunk_count += 1
 	if generated_chunk_count == CHUNK_COUNT:
 		is_generated = true
-		vegetation.build_instances(tree_sites, heights, world_seed)
+		vegetation.build_instances(tree_sites, heights, world_seed, biome_map)
 		_rebuild_static_light_sources()
 		_log_world_counts()
 		for chunk_index in range(CHUNK_COUNT):
@@ -369,7 +404,10 @@ func _make_mesh_snapshot(chunk_index: int) -> Dictionary:
 				block_snapshot[snapshot_index] = blocks[_block_index(cell)]
 				light_snapshot[snapshot_index] = get_light_level(cell)
 				var surface_y: int = heights[cell.x + cell.z * WORLD_X]
-				sky_snapshot[snapshot_index] = 1 if cell.y >= surface_y else 0
+				# 0 = underground, 1 = open sky, 2 = Hushwoods canopy. The mesher
+				# turns the canopy case into dim fill and reduced sunlight.
+				var surface_value := 2 if int(biome_map[cell.x + cell.z * WORLD_X]) == 1 else 1
+				sky_snapshot[snapshot_index] = surface_value if cell.y >= surface_y else 0
 	return {"blocks": block_snapshot, "light": light_snapshot, "sky": sky_snapshot}
 func _process_light_updates() -> void:
 	light_updates_last_frame = 0
@@ -711,16 +749,19 @@ func _log_world_counts() -> void:
 	for block_index in range(block_defs.size()):
 		print("M1 block count %s=%d" % [block_defs[block_index].block_id, counts[block_index]])
 	var ashen_columns := 0
+	var hush_columns := 0
 	for biome_id in biome_map:
 		if biome_id == 0:
 			ashen_columns += 1
+		elif biome_id == 1:
+			hush_columns += 1
 	var cave_air := 0
 	for y in range(12):
 		for z in range(WORLD_Z):
 			for x in range(WORLD_X):
 				if get_block_id(Vector3i(x, y, z)) == air_id:
 					cave_air += 1
-	print("M1 biome count Ashen Flats columns=%d; underground cave air voxels=%d" % [ashen_columns, cave_air])
+	print("M1 biome count Ashen Flats columns=%d Hushwoods columns=%d; underground cave air voxels=%d" % [ashen_columns, hush_columns, cave_air])
 
 
 func _check_slow_frame(delta: float) -> void:

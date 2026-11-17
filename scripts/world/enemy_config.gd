@@ -5,6 +5,8 @@ class_name EnemyConfig
 @export_range(1, 128, 1) var max_active_enemies := 16
 @export_range(1, 8, 1) var gloomling_group_size := 3
 @export_range(0.0, 1.0, 0.01) var lamp_eater_spawn_chance := 0.2
+@export_range(0.0, 1.0, 0.01) var hollow_spawn_chance := 0.12
+@export_range(0, 8, 1) var max_active_hollows := 2
 @export_range(5.0, 64.0, 1.0) var min_spawn_distance := 10.0
 @export_range(5.0, 128.0, 1.0) var max_spawn_distance := 28.0
 @export_range(1.0, 30.0, 1.0) var spawn_cooldown_seconds := 18.0
@@ -21,3 +23,8 @@ class_name EnemyConfig
 @export var lamp_eater_extinguish_seconds := 12.0
 @export_range(1.0, 64.0, 1.0) var lamp_eater_target_radius := 24.0
 @export var lamp_eater_target_blocks: Array[StringName] = [&"torch"]
+@export var hollow_speed := 1.6
+@export var hollow_health := 120.0
+@export var hollow_damage := 50.0
+@export var hollow_attack_range := 1.8
+@export var hollow_attack_interval := 2.0

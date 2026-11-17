@@ -16,12 +16,15 @@ uniform vec3 sun_color = vec3(1.0, 0.86, 0.64);
 uniform vec3 sky_tint = vec3(0.80, 0.87, 1.0);
 uniform vec3 flashlight_color = vec3(1.0, 0.89, 0.72);
 uniform vec3 static_light_color = vec3(1.0);
+uniform sampler2D detail_texture : source_color, filter_nearest, repeat_enable;
+uniform float detail_strength : hint_range(0.0, 1.0) = 0.65;
 
 varying vec3 fragment_world_position;
 varying vec3 fragment_world_normal;
 varying vec3 base_color_detail;
 varying float static_light_value;
 varying float sky_light_value;
+varying float canopy_shade;
 
 float bayer8(vec2 pixel_position) {
 	ivec2 cell = ivec2(mod(floor(pixel_position), 8.0));
@@ -77,6 +80,7 @@ void vertex() {
 	fragment_world_normal = normalize(MODEL_NORMAL_MATRIX * NORMAL);
 	static_light_value = clamp(COLOR.a, 0.0, 1.0);
 	sky_light_value = clamp(UV2.x * ambient_sky_level, 0.0, 1.0);
+	canopy_shade = UV2.y > 0.001 ? UV2.y : 1.0;
 
 	// World-space surface detail is evaluated per vertex so the shadowed sun
 	// pass can reuse the same mottling and bevel as the emissive fill pass.
@@ -112,8 +116,18 @@ void fragment() {
 	float dither_gate = 1.0 - smoothstep(0.26, 0.60, fill_light);
 	float graded_light = mix(fill_light, quantized_light, dither_gate);
 
-	EMISSION = base_color_detail * graded_light * fill_tint;
-	ALBEDO = base_color_detail;
+	// Block-aligned projected detail: each world unit repeats one textured tile,
+	// so grout lines land on block seams and the grain stays crisp up close.
+	vec3 detail_weights = abs(normalize(fragment_world_normal));
+	detail_weights /= max(detail_weights.x + detail_weights.y + detail_weights.z, 0.001);
+	vec3 detail_x = texture(detail_texture, fragment_world_position.zy).rgb;
+	vec3 detail_y = texture(detail_texture, fragment_world_position.xz).rgb;
+	vec3 detail_z = texture(detail_texture, fragment_world_position.xy).rgb;
+	vec3 block_detail = detail_x * detail_weights.x + detail_y * detail_weights.y + detail_z * detail_weights.z;
+	vec3 surface_color = base_color_detail * mix(vec3(1.0), block_detail, detail_strength);
+
+	EMISSION = surface_color * graded_light * fill_tint;
+	ALBEDO = surface_color;
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.0;
 }
@@ -126,6 +140,6 @@ void light() {
 		fill_light = max(fill_light, dynamic_flashlight_level());
 		// The engine multiplies the light pass by ALBEDO; fill light is emitted
 		// separately, so sun only adds the headroom above that fill.
-		DIFFUSE_LIGHT += sun_color * (sun_light * (1.0 - clamp(fill_light, 0.0, 1.0)) * ATTENUATION);
+		DIFFUSE_LIGHT += sun_color * (sun_light * canopy_shade * (1.0 - clamp(fill_light, 0.0, 1.0)) * ATTENUATION);
 	}
 }

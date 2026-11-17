@@ -946,3 +946,23 @@ M2 isolated verdict: OPEN — automated checks pass; waiting for human visual ac
 ### Next
 
 - Check whether reeds read from a closer riverbed view, and consider trimming the tallest crystal towers that dominate the skyline.
+
+## 2026-11-17 — Horizon depth, crystal trim, reedbed pass
+
+### Done
+
+- Trimmed lumen crystal clusters: landmark cores 10–12 blocks (was 16–18), ordinary clusters 6–8 (was 10–14), side shards 3–5 (was 5–9), three landmark shards instead of four. The spires now sit under the ridge line instead of towering over the horizon.
+- Added `HorizonRidges` plus `shaders/horizon_ridge.gdshader`: three concentric silhouette rings outside the 128×128 map (radii 120/152/196) with a foot-to-crest haze gradient, and a haze annulus beyond the world edge. `DayNightCycle` tints them with the sky, horizon and twilight colours and they darken at night like real distant ranges.
+- Fixed the invisible reedbed: grass and reeds had `visibility_range_end` measured from the world-centred AABB, so the whole MultiMesh was culled once the camera left the map centre. Removed the range on both cover batches; all 2,407 reed clumps and ~3,000 grass tufts now draw everywhere.
+- Rebuilt reeds as four tapered crossed cards plus seed heads per clump, with warmer olive/straw colours, so they read as a stand from across the channel instead of pale specks. Also reduced their excessive width for close-up play.
+
+### Verified
+
+- Re-ran `debug/cave_spawn_check.gd` (terrain, 55 tree sites, tall crystal, spawn, cave spawn, Gloomling, fire) and `debug/world_density_check.gd`: all pass.
+- Headless editor import: no parse errors.
+- Captures `debug/evidence/phase3_vista.png`, `phase3_horizon.png`, `phase3_skyline.png`, `phase3_river.png`, `phase3_channel_top.png`, `phase3_night.png`. Riverbed and skyline show the reed stand; vista and horizon show three layered ranges. A diagnostic top-down confirmed the channel winding east of spawn.
+- Copies of all evidence now live in the user's desktop folder `Lumenfall Screenshots`.
+
+### Next
+
+- The riverbed walls are still very stepped; softening the bank terraces would make the channel read from ground level as well as from the aerial capture.

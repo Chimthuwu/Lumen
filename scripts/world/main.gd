@@ -74,7 +74,7 @@ func _debug_text() -> String:
 	var light_level: int = world.get_light_level(light_cell) if world.is_generated else 0
 	var gloom_level := world.get_gloom_level(light_cell)
 	var chunk_index := world._chunk_index(Vector3i(light_cell.x / 16, light_cell.y / 16, light_cell.z / 16))
-	return "LUMENFALL M4 | FPS %d | Draw %d | HP %d | %s | LIGHT %d | GLOOM %.2f\nChunks %d/256 generated, %d/256 meshed, %d/256 lit | blocks %d\nGloom chunk %d | enemies %d | static lights %d | WASD move | 1–4 cartridges | Q projector | K save | J load | F HUD | T flashlight %s | F6 gloomlings | F7 lamp eater | F8 local gloom" % [Engine.get_frames_per_second(), draw_calls, roundi(player.health), cycle.phase_name.to_upper(), light_level, gloom_level, generated, meshed, world.initialized_light_chunks, block_total, chunk_index, get_tree().get_nodes_in_group("enemies").size(), world.static_light_sources.size(), "ON" if world.flashlight_enabled else "OFF"]
+	return "LUMENFALL M4 | FPS %d | Draw %d | HP %d | %s | LIGHT %d | GLOOM %.2f\nChunks %d/256 generated, %d/256 meshed, %d/256 lit | blocks %d\nGloom chunk %d | enemies %d | static lights %d | WASD move | 1–4 cartridges | WHEEL cartridges/projector | K save | J load | F3 HUD | F flashlight %s | F6 gloomlings | F7 lamp eater | F8 local gloom" % [Engine.get_frames_per_second(), draw_calls, roundi(player.health), cycle.phase_name.to_upper(), light_level, gloom_level, generated, meshed, world.initialized_light_chunks, block_total, chunk_index, get_tree().get_nodes_in_group("enemies").size(), world.static_light_sources.size(), "ON" if world.flashlight_enabled else "OFF"]
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:

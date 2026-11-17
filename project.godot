@@ -50,7 +50,7 @@ move_light={
 }
 toggle_debug={
 "deadzone": 0.2,
-"events": [Object(InputEventKey,"physical_keycode":70)]
+"events": [Object(InputEventKey,"physical_keycode":4194334)]
 }
 sprint={
 "deadzone": 0.2,
@@ -88,10 +88,6 @@ debug_local_gloom={
 "deadzone": 0.2,
 "events": [Object(InputEventKey,"physical_keycode":4194339)]
 }
-mode_switch={
-"deadzone": 0.2,
-"events": [Object(InputEventKey,"physical_keycode":81)]
-}
 pause_mouse={
 "deadzone": 0.2,
 "events": [Object(InputEventKey,"physical_keycode":4194305)]
@@ -102,7 +98,7 @@ interact={
 }
 toggle_flashlight={
 "deadzone": 0.2,
-"events": [Object(InputEventKey,"physical_keycode":84)]
+"events": [Object(InputEventKey,"physical_keycode":70)]
 }
 
 cartridge_next={

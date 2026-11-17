@@ -143,7 +143,15 @@ func _place_target_block() -> void:
 		return
 	var place_cell: Vector3i = hit["previous_air"]
 	if _player_overlaps_cell(place_cell):
-		return
+		# Pillar-up: a block placed under an airborne player lifts them onto it
+		# instead of being silently rejected.
+		if on_floor:
+			return
+		var cell_top := float(place_cell.y + 1)
+		if cell_top < position.y - 0.05 or cell_top > position.y + 1.15:
+			return
+		position.y = cell_top + 0.02
+		velocity.y = maxf(velocity.y, 0.0)
 	world.set_block(place_cell, world.block_ids[&"dirt"])
 
 

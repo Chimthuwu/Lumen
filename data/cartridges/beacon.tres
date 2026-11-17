@@ -13,5 +13,5 @@ minimum_light = 0
 range = 24.0
 gloom_noise = 1.0
 light_level = 15
-light_block_id = &"torch"
+light_block_id = &"beacon"
 duration = 30.0

@@ -21,10 +21,12 @@ var name_label: Label
 var mode_label: Label
 var build_label: Label
 var reserve_label: Label
-var reserve_segments: Array[ColorRect] = []
+var reserve_segments: Array[Panel] = []
+var reserve_styles: Array[StyleBoxFlat] = []
 var cartridge_pips: Array[ColorRect] = []
-var health_bar: ColorRect
-var health_fill: ColorRect
+var health_bar: Panel
+var health_fill: Panel
+var health_fill_style: StyleBoxFlat
 var status_label: Label
 var hint_panel: Panel
 var hint_label: Label
@@ -72,6 +74,10 @@ func _style(bg: Color, border: Color, border_width := 1, radius := 4) -> StyleBo
 	style.content_margin_right = 10.0
 	style.content_margin_top = 6.0
 	style.content_margin_bottom = 6.0
+	style.anti_aliasing = true
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.55)
+	style.shadow_size = 3
+	style.shadow_offset = Vector2(0, 2)
 	return style
 
 
@@ -106,10 +112,17 @@ func _build_status() -> void:
 	debug_label.visible = false
 	add_child(debug_label)
 
-	status_label = _label("", 12, TEXT_WARN, HORIZONTAL_ALIGNMENT_CENTER)
+	status_label = _label("", 13, Color(1.0, 0.74, 0.28), HORIZONTAL_ALIGNMENT_CENTER)
 	status_label.name = "StatusLabel"
-	status_label.position = Vector2(127, 346)
-	status_label.size = Vector2(600, 18)
+	status_label.position = Vector2(127, 340)
+	status_label.size = Vector2(600, 28)
+	status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	status_label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.9))
+	status_label.add_theme_color_override("font_outline_color", Color(0.02, 0.015, 0.01, 0.75))
+	status_label.add_theme_constant_override("shadow_offset_x", 1)
+	status_label.add_theme_constant_override("shadow_offset_y", 2)
+	status_label.add_theme_constant_override("shadow_outline_size", 2)
+	status_label.add_theme_constant_override("outline_size", 2)
 	status_label.visible = false
 	add_child(status_label)
 
@@ -121,7 +134,7 @@ func _build_status() -> void:
 
 
 func _build_loadout() -> void:
-	loadout_panel = _panel(Rect2(16, 388, 252, 78), _style(PANEL_BG, PANEL_BORDER))
+	loadout_panel = _panel(Rect2(16, 388, 252, 78), _style(Color(0.018, 0.028, 0.032, 0.94), Color(0.38, 0.68, 0.60, 0.50), 1, 2))
 	loadout_panel.name = "LoadoutPanel"
 
 	accent_bar = ColorRect.new()
@@ -157,13 +170,19 @@ func _build_loadout() -> void:
 	add_child(reserve_caption)
 
 	for index in range(RESERVE_SEGMENTS):
-		var segment := ColorRect.new()
-		segment.position = Vector2(74 + index * 14, 444)
-		segment.size = Vector2(11, 5)
-		segment.color = Color(0.05, 0.10, 0.09, 1.0)
+		var segment_style := _style(Color(0.05, 0.10, 0.09, 1.0), Color(0.14, 0.24, 0.22, 0.9), 1, 1)
+		segment_style.content_margin_left = 0.0
+		segment_style.content_margin_right = 0.0
+		segment_style.content_margin_top = 0.0
+		segment_style.content_margin_bottom = 0.0
+		var segment := Panel.new()
+		segment.position = Vector2(74 + index * 14, 443)
+		segment.size = Vector2(11, 7)
 		segment.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		segment.add_theme_stylebox_override("panel", segment_style)
 		add_child(segment)
 		reserve_segments.append(segment)
+		reserve_styles.append(segment_style)
 
 	reserve_label = _label("100", 9, TEXT_DIM, HORIZONTAL_ALIGNMENT_RIGHT)
 	reserve_label.position = Vector2(166, 440)
@@ -188,19 +207,30 @@ func _build_health() -> void:
 	value.size = Vector2(80, 10)
 	add_child(value)
 
-	var background := ColorRect.new()
-	background.position = Vector2(16, 375)
-	background.size = Vector2(252, 5)
-	background.color = Color(0.03, 0.05, 0.06, 0.9)
-	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(background)
+	health_bar = Panel.new()
+	health_bar.position = Vector2(16, 373)
+	health_bar.size = Vector2(252, 9)
+	health_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	health_bar.add_theme_stylebox_override("panel", _style(Color(0.02, 0.035, 0.04, 0.95), Color(0.18, 0.30, 0.28, 0.9), 1, 2))
+	add_child(health_bar)
 
-	health_fill = ColorRect.new()
-	health_fill.position = Vector2(16, 375)
-	health_fill.size = Vector2(252, 5)
-	health_fill.color = Color(0.42, 0.85, 0.62, 0.95)
+	health_fill_style = _style(Color(0.32, 0.86, 0.58, 0.95), Color(0.70, 1.0, 0.86, 0.8), 1, 1)
+	health_fill_style.shadow_color = Color(0.2, 0.9, 0.6, 0.45)
+	health_fill_style.shadow_size = 4
+	health_fill = Panel.new()
+	health_fill.position = Vector2(17, 374)
+	health_fill.size = Vector2(250, 7)
 	health_fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	health_fill.add_theme_stylebox_override("panel", health_fill_style)
 	add_child(health_fill)
+
+	for index in range(1, 4):
+		var tick := ColorRect.new()
+		tick.position = Vector2(16 + 63 * index, 373)
+		tick.size = Vector2(1, 9)
+		tick.color = Color(0.01, 0.02, 0.02, 0.85)
+		tick.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(tick)
 
 
 func _build_crosshair() -> void:
@@ -288,8 +318,8 @@ func _build_pause() -> void:
 	header.size = Vector2(200, 12)
 	panel.add_child(header)
 
-	var left_controls := ["WASD      Move", "SHIFT     Sprint", "SPACE     Jump", "LMB       Fire", "WHEEL     Cycle cartridge", "T         Flashlight"]
-	var right_controls := ["1–4       Select cartridge", "Q         Projector Mode", "E         Build material", "WHEEL     Build depth (drag)", "F         Debug readout", "ESC       Pause"]
+	var left_controls := ["WASD      Move", "SHIFT     Sprint", "SPACE     Jump", "LMB       Fire", "WHEEL     Cycle cartridge / Projector", "F         Flashlight"]
+	var right_controls := ["1–4       Select cartridge", "WHEEL     Build depth (drag)", "E         Build material", "F3        Debug readout", "K / J     Save / Load", "ESC       Pause"]
 	for index in range(left_controls.size()):
 		var left := _label(left_controls[index], 10, TEXT_DIM)
 		left.position = Vector2(24, 92 + index * 18)
@@ -341,9 +371,12 @@ func _update_loadout() -> void:
 	var ratio := clampf(caster.reserve / caster.CONFIG.reserve_capacity, 0.0, 1.0)
 	var lit := 0 if ratio <= 0.001 else ceili(ratio * float(RESERVE_SEGMENTS))
 	for index in range(reserve_segments.size()):
-		var segment: ColorRect = reserve_segments[index]
+		var style := reserve_styles[index]
 		var on := index < lit
-		segment.color = Color(0.25, 1.0, 0.78, 0.95) if on else Color(0.05, 0.10, 0.09, 1.0)
+		style.bg_color = Color(0.20, 0.98, 0.74, 0.95) if on else Color(0.04, 0.08, 0.07, 1.0)
+		style.border_color = Color(0.75, 1.0, 0.92, 0.85) if on else Color(0.12, 0.21, 0.19, 0.9)
+		style.shadow_color = Color(0.16, 0.95, 0.68, 0.55 if on else 0.0)
+		style.shadow_size = 3 if on else 0
 	reserve_label.text = "%d" % roundi(caster.reserve)
 	reserve_label.add_theme_color_override("font_color", TEXT_WARN if ratio < 0.2 else TEXT_DIM)
 
@@ -361,8 +394,16 @@ func _update_flashlight() -> void:
 
 func _update_health() -> void:
 	var ratio := clampf(player.health / 100.0, 0.0, 1.0)
-	health_fill.size.x = 252.0 * ratio
-	health_fill.color = Color(0.85, 0.38, 0.30, 0.95) if ratio < 0.35 else Color(0.42, 0.85, 0.62, 0.95)
+	health_fill.size.x = 250.0 * ratio
+	health_fill.visible = ratio > 0.001
+	if ratio < 0.35:
+		health_fill_style.bg_color = Color(0.88, 0.32, 0.24, 0.95)
+		health_fill_style.border_color = Color(1.0, 0.70, 0.55, 0.85)
+		health_fill_style.shadow_color = Color(1.0, 0.28, 0.15, 0.45)
+	else:
+		health_fill_style.bg_color = Color(0.32, 0.86, 0.58, 0.95)
+		health_fill_style.border_color = Color(0.70, 1.0, 0.86, 0.8)
+		health_fill_style.shadow_color = Color(0.2, 0.9, 0.6, 0.45)
 	var value := get_node_or_null("HealthValue") as Label
 	if value != null:
 		value.text = "%d" % roundi(player.health)

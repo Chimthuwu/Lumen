@@ -77,9 +77,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.keycode >= KEY_1 and event.keycode <= KEY_4:
 			_select_cartridge(event.keycode - KEY_1)
 			get_viewport().set_input_as_handled()
-		elif event.keycode == KEY_Q:
-			_set_projector_mode(not projector_mode)
-			get_viewport().set_input_as_handled()
 		elif event.keycode == KEY_ESCAPE:
 			if dragging:
 				_cancel_projector_drag()
@@ -99,7 +96,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			extrusion_depth = maxi(1, extrusion_depth - 1)
 			get_viewport().set_input_as_handled()
 			return
-		if not projector_mode and event.pressed:
+		if event.pressed:
 			if event.is_action_pressed("cartridge_next"):
 				_cycle_cartridge(1)
 				get_viewport().set_input_as_handled()
@@ -269,7 +266,7 @@ func _land_flare(shot: Dictionary, position: Vector3) -> void:
 		target = cell + Vector3i.UP
 	var torch_id: int = int(world.block_ids.get(cartridge.light_block_id, -1))
 	if torch_id >= 0 and world._inside_world(target) and world.get_block_id(target) == world.air_id and world.set_block(target, torch_id):
-		temporary_lights.append({"cell": target, "remaining": cartridge.duration})
+		temporary_lights.append({"cell": target, "block_id": torch_id, "remaining": cartridge.duration})
 		Vfx.pillar(world, Vector3(target) + Vector3(0.5, 0.0, 0.5), cartridge.accent_color, 2.5, 0.8, 0.16)
 	Vfx.burst(world, position, cartridge.accent_color, Vector3.UP, 14, 5.0, 0.06, 0.45)
 	if cartridge.damage > 0.0:
@@ -316,9 +313,39 @@ func _place_temporary_light(cartridge: CartridgeDef, hit: Dictionary) -> bool:
 	var torch_id: int = world.block_ids[cartridge.light_block_id]
 	if not world.set_block(cell, torch_id):
 		return false
-	temporary_lights.append({"cell": cell, "remaining": cartridge.duration})
-	_set_status("TEMPORARY LIGHT PLANTED")
+	var entry := {"cell": cell, "block_id": torch_id, "remaining": cartridge.duration}
+	if cartridge.action == "beacon":
+		entry["aura"] = _spawn_beacon_aura(cell, cartridge.accent_color)
+		Vfx.pillar(world, Vector3(cell) + Vector3(0.5, 0.0, 0.5), cartridge.accent_color, 2.0, 0.9, 0.12)
+		temporary_lights.append(entry)
+		_set_status("BEACON DEPLOYED")
+	else:
+		temporary_lights.append(entry)
+		_set_status("TEMPORARY LIGHT PLANTED")
 	return true
+
+
+func _spawn_beacon_aura(cell: Vector3i, color: Color) -> MeshInstance3D:
+	var aura := MeshInstance3D.new()
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.85
+	sphere.height = 1.7
+	sphere.radial_segments = 12
+	sphere.rings = 6
+	aura.mesh = sphere
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	material.albedo_color = Color(color.r, color.g, color.b, 0.10)
+	material.emission_enabled = true
+	material.emission = color
+	material.emission_energy_multiplier = 1.6
+	aura.material_override = material
+	aura.position = Vector3(cell) + Vector3(0.5, 0.62, 0.5)
+	aura.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	world.add_child(aura)
+	return aura
 
 func _update_temporary_lights(delta: float) -> void:
 	for index in range(temporary_lights.size() - 1, -1, -1):
@@ -326,8 +353,12 @@ func _update_temporary_lights(delta: float) -> void:
 		if temporary_lights[index]["remaining"] > 0.0:
 			continue
 		var cell: Vector3i = temporary_lights[index]["cell"]
-		if world._inside_world(cell) and world.get_block_id(cell) == world.block_ids[CARTRIDGES[1].light_block_id]:
+		var stored_id: int = temporary_lights[index].get("block_id", -1)
+		if stored_id >= 0 and world._inside_world(cell) and world.get_block_id(cell) == stored_id:
 			world.set_block(cell, world.air_id)
+		var aura = temporary_lights[index].get("aura")
+		if is_instance_valid(aura):
+			aura.queue_free()
 		temporary_lights.remove_at(index)
 
 func _voxel_raycast(max_distance: float) -> Dictionary:
@@ -372,7 +403,7 @@ func _create_preview() -> void:
 	preview.mesh = _wire_box_mesh(Vector3.ONE)
 	preview_material = StandardMaterial3D.new()
 	preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	preview_material.no_depth_test = true
+	preview_material.no_depth_test = false
 	preview_material.albedo_color = Color(0.15, 0.9, 1.0, 1.0)
 	preview_material.cull_mode = BaseMaterial3D.CULL_DISABLED
 	preview.material_override = preview_material
@@ -445,11 +476,15 @@ func _update_projector_preview() -> void:
 	for cell in cells:
 		low = Vector3i(mini(low.x, cell.x), mini(low.y, cell.y), mini(low.z, cell.z))
 		high = Vector3i(maxi(high.x, cell.x), maxi(high.y, cell.y), maxi(high.z, cell.z))
-		if not world._inside_world(cell) or world.get_block_id(cell) != world.air_id or player.call("_player_overlaps_cell", cell):
+		if player.call("_player_overlaps_cell", cell):
+			preview.visible = false
+			return
+		if not world._inside_world(cell) or world.get_block_id(cell) != world.air_id:
 			valid = false
 	var size := Vector3(high - low + Vector3i.ONE)
 	preview.mesh = _wire_box_mesh(size)
 	preview.position = Vector3(low) + size * 0.5
+	preview.scale = Vector3.ONE
 	preview_material.albedo_color = Color(0.15, 0.9, 1.0, 1.0) if valid else Color(1.0, 0.2, 0.12, 1.0)
 	preview_valid = valid
 	preview.visible = true
@@ -516,22 +551,30 @@ func _normal_axis(normal: Vector3i) -> int:
 	return 2
 
 func _select_cartridge(index: int) -> void:
+	if projector_mode:
+		_set_projector_mode(false)
 	selected_cartridge = posmod(index, CARTRIDGES.size())
 	var cartridge: CartridgeDef = CARTRIDGES[selected_cartridge]
 	cartridge_changed.emit(selected_cartridge, cartridge)
 
+# The wheel walks cartridges 1-4, then Projector Mode, then wraps to cartridge 1.
 func _cycle_cartridge(direction: int) -> void:
-	_select_cartridge(selected_cartridge + direction)
+	if projector_mode:
+		_set_projector_mode(false)
+		_select_cartridge(0 if direction > 0 else CARTRIDGES.size() - 1)
+		return
+	var target := selected_cartridge + direction
+	if target >= CARTRIDGES.size() or target < 0:
+		_set_projector_mode(true)
+		return
+	_select_cartridge(target)
 
 func _set_projector_mode(active: bool) -> void:
 	projector_mode = active
 	dragging = false
 	preview.visible = false
 	projector_toggled.emit(projector_mode)
-	if projector_mode:
-		_show_hint("PROJECTOR MODE\nLMB DRAG to build   E material   WHEEL depth\nQ or ESC to exit", 6.0)
-	else:
-		hint_time = 0.0
+	hint_time = 0.0
 
 func _cancel_projector_drag() -> void:
 	dragging = false
