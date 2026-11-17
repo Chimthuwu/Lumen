@@ -49,9 +49,14 @@ func _process(delta: float) -> void:
 
 
 func is_observed() -> bool:
-	if not is_instance_valid(player) or player.camera == null or not world.is_generated:
+	if not is_instance_valid(player) or not world.is_generated:
 		return false
-	var camera := player.camera
+	# While driving, the active view is the buggy's chase camera.
+	var camera: Camera3D = world.player_camera
+	if not is_instance_valid(camera):
+		camera = player.camera
+	if camera == null:
+		return false
 	var from := camera.global_position
 	var forward := (-camera.global_basis.z).normalized()
 	for height in BODY_SAMPLE_HEIGHTS:

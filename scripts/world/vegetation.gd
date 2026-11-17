@@ -6,7 +6,6 @@ const ARCHETYPE_COUNT := 6
 const ARCHETYPE_SEED := 4111
 const GRASS_CELL := 3
 const GRASS_CHANCE := 0.055
-const CANYON_FLOOR_MAX := 19
 const BARK_DARK := Color(0.16, 0.12, 0.11)
 const BARK_LIGHT := Color(0.58, 0.49, 0.40)
 const GRASS_DARK := Color(0.20, 0.18, 0.155)
@@ -22,6 +21,9 @@ var tree_sites: Array = []
 var site_slots: Dictionary = {}
 var tree_count := 0
 var grass_count := 0
+var region_center := Vector2i(1 << 30, 1 << 30)
+var region_seed := -1
+var region_radius := 0
 
 
 func configure(world_bounds: AABB) -> void:
@@ -42,7 +44,21 @@ func configure(world_bounds: AABB) -> void:
 	grass_instance = _make_cover_instance("AshGrass", _build_grass_mesh(), 0.10)
 
 
-func build_instances(sites: Array, heights: PackedInt32Array, world_seed: int, biome_map: PackedByteArray = PackedByteArray()) -> void:
+# Region-based rebuild: trees and tufts follow the streaming centre instead of
+# being baked once over a fixed 128x128 map.
+func update_region(world_seed: int, center: Vector2i, radius: int) -> void:
+	if world_seed == region_seed and radius == region_radius and center.distance_squared_to(region_center) < 48 * 48:
+		return
+	region_seed = world_seed
+	region_center = center
+	region_radius = radius
+	BiomeManager.configure(world_seed)
+	var sites := WorldGenerator.collect_tree_sites_region(world_seed, center.x - radius, center.y - radius, center.x + radius, center.y + radius)
+	_apply_sites(sites)
+	_build_region_cover(world_seed, center, mini(radius, 72))
+
+
+func _apply_sites(sites: Array) -> void:
 	tree_sites = sites
 	var per_archetype: Array = []
 	for index in range(ARCHETYPE_COUNT):
@@ -62,6 +78,9 @@ func build_instances(sites: Array, heights: PackedInt32Array, world_seed: int, b
 	for archetype in range(ARCHETYPE_COUNT):
 		var transforms: Array = per_archetype[archetype]
 		var multimesh := tree_multimeshes[archetype]
+		# Transform format and mesh may only change while the batch is empty;
+		# each streaming region rebuild arrives with the previous instances live.
+		multimesh.instance_count = 0
 		multimesh.transform_format = MultiMesh.TRANSFORM_3D
 		multimesh.mesh = tree_meshes[archetype]
 		multimesh.instance_count = transforms.size()
@@ -84,8 +103,6 @@ func build_instances(sites: Array, heights: PackedInt32Array, world_seed: int, b
 		}
 		archetype_cursor[archetype] += 1
 		tree_count += 1
-
-	_build_ground_cover(heights, world_seed, biome_map)
 
 
 func set_sun(direction: Vector3, color: Color, strength: float) -> void:
@@ -392,26 +409,26 @@ func _make_material(wind: float) -> ShaderMaterial:
 	return material
 
 
-func _build_ground_cover(heights: PackedInt32Array, world_seed: int, biome_map: PackedByteArray = PackedByteArray()) -> void:
+func _build_region_cover(world_seed: int, center: Vector2i, radius: int) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = world_seed ^ 0x51A5
 	var grass_transforms: Array[Transform3D] = []
-	for z in range(1, 127, GRASS_CELL):
-		for x in range(1, 127, GRASS_CELL):
+	for z in range(center.y - radius, center.y + radius, GRASS_CELL):
+		for x in range(center.x - radius, center.x + radius, GRASS_CELL):
 			if absi(x - 64) <= 6 and absi(z - 64) <= 6:
-				continue
-			# Hushwoods floor is bare dark soil; ash grass would break the palette.
-			if not biome_map.is_empty() and biome_map[x + z * 128] == 1:
 				continue
 			if rng.randf() > GRASS_CHANCE:
 				continue
-			var ground := heights[x + z * 128]
-			# Canyon floors stay bare gravel; only dry, flat shelves keep tufts.
-			if ground <= CANYON_FLOOR_MAX:
+			# Ashen shelves only: ash tufts would break the Hushwoods, Frostfall
+			# and Mire palettes.
+			if BiomeManager.dominant_biome(x, z) != BiomeManager.ASHEN:
 				continue
-			if absi(heights[x + 1 + z * 128] - ground) > 1 or absi(heights[x - 1 + z * 128] - ground) > 1:
+			var ground := BiomeManager.get_height(x, z)
+			if BiomeManager.is_canyon_floor(x, z):
 				continue
-			if absi(heights[x + (z + 1) * 128] - ground) > 1 or absi(heights[x + (z - 1) * 128] - ground) > 1:
+			if absi(BiomeManager.get_height(x + 1, z) - ground) > 1 or absi(BiomeManager.get_height(x - 1, z) - ground) > 1:
+				continue
+			if absi(BiomeManager.get_height(x, z + 1) - ground) > 1 or absi(BiomeManager.get_height(x, z - 1) - ground) > 1:
 				continue
 			var position := Vector3(float(x) + rng.randf_range(0.15, 0.85), float(ground) + 1.0, float(z) + rng.randf_range(0.15, 0.85))
 			var scale_value := rng.randf_range(0.45, 0.85)

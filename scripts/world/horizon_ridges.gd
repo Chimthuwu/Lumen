@@ -3,7 +3,7 @@ class_name HorizonRidges
 
 const RIDGE_SHADER := preload("res://shaders/horizon_ridge.gdshader")
 const SEGMENTS := 160
-const CENTER := Vector2(64.0, 64.0)
+const CENTER := Vector2.ZERO
 const DISK_INNER := 96.0
 const DISK_OUTER := 340.0
 

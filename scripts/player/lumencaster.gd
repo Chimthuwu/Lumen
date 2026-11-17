@@ -73,6 +73,8 @@ func _process(delta: float) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not world.is_generated:
 		return
+	if player is VoxelPlayer and (player as VoxelPlayer).driving:
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode >= KEY_1 and event.keycode <= KEY_4:
 			_select_cartridge(event.keycode - KEY_1)
@@ -585,6 +587,19 @@ func _show_hint(text: String, duration: float) -> void:
 	hint_text = text
 	hint_time = duration
 	hint_fade = duration
+
+
+func show_context_hint(text: String, duration: float) -> void:
+	_show_hint(text, duration)
+
+
+# Entering a vehicle must not leave a projector drag armed behind the camera.
+func stop_action_state() -> void:
+	dragging = false
+	if preview != null:
+		preview.visible = false
+	if projector_mode:
+		_set_projector_mode(false)
 
 func _set_status(message: String) -> void:
 	status_message = message

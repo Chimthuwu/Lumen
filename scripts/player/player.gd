@@ -15,6 +15,7 @@ const LOOK_SENSITIVITY := 0.0022
 
 var velocity := Vector3.ZERO
 var on_floor := false
+var driving := false
 var fixed_accumulator := 0.0
 var spawned := false
 var health := 100.0
@@ -28,10 +29,13 @@ func _ready() -> void:
 
 func _physics_process(delta: float) -> void:
 	damage_cooldown = maxf(0.0, damage_cooldown - delta)
+	# Control is handed to the buggy; it keeps this node at the driver's seat.
+	if driving:
+		return
 	if not spawned:
 		if world.is_generated:
-			var spawn_height: int = world.get_surface_height(64, 64)
-			position = Vector3(64.5, float(spawn_height) + 1.0, 64.5)
+			var spawn_height: int = world.spawn_height()
+			position = Vector3(float(world.spawn_origin.x) + 0.5, float(spawn_height) + 1.0, float(world.spawn_origin.z) + 0.5)
 			spawned = true
 		return
 	fixed_accumulator += delta
@@ -45,6 +49,8 @@ func _physics_process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if driving:
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		rotation.y -= event.relative.x * LOOK_SENSITIVITY
 		camera.rotation.x = clampf(camera.rotation.x - event.relative.y * LOOK_SENSITIVITY, -1.52, 1.52)

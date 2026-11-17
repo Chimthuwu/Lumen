@@ -8,7 +8,9 @@ const SaveSystem = preload("res://scripts/save/save_manager.gd")
 @onready var cycle: DayNightCycle = $DayNightCycle
 @onready var gloom: GloomManager = $GloomManager
 @onready var enemy_director: EnemyDirector = $EnemyDirector
+@onready var buggy: DuneBuggy = $Buggy
 
+var edit_journal := BlockEditJournal.new()
 var debug_visible := false
 var pause_due_to_focus := false
 
@@ -17,6 +19,8 @@ func _ready() -> void:
 	player.process_mode = Node.PROCESS_MODE_PAUSABLE
 	$HUD.process_mode = Node.PROCESS_MODE_ALWAYS
 	debug_label.visible = false
+	# Journal every player edit live so the save stays sparse on an infinite map.
+	world.block_edited.connect(edit_journal.on_block_edited)
 
 func _process(_delta: float) -> void:
 	if Input.is_action_just_pressed("toggle_debug"):
@@ -41,23 +45,37 @@ func _process(_delta: float) -> void:
 func save_game() -> void:
 	if not world.is_generated or not player.spawned:
 		return
-	SaveSystem.save_world(world, player.position, {
+	SaveSystem.save_world(world, edit_journal, player.position, {
 		"day_night_elapsed": cycle.elapsed_seconds,
-		"gloom_levels": gloom.to_save_array()
+		"gloom_levels": gloom.to_save_array(),
+		"buggy": buggy.to_save_data()
 	})
 
 
 func load_game() -> void:
 	if not world.is_generated:
 		return
-	var save_data := SaveSystem.load_world(world.world_seed, world.BLOCK_VOLUME)
+	var had_directory := DirAccess.dir_exists_absolute(ProjectSettings.globalize_path("user://worlds/%d" % world.world_seed))
+	var save_data := SaveSystem.load_world(world.world_seed, world)
 	if save_data.is_empty() or not world.restore_save(save_data):
+		if had_directory:
+			# Approved migration policy: old formats are discarded, not converted.
+			var caster := player.get_node_or_null("Lumencaster") as Lumencaster
+			if caster != null:
+				caster.show_context_hint(SaveSystem.FORMAT_CHANGED_MESSAGE, 3.0)
 		return
+	# restore_save wiped the world's modified_chunks; re-seed the live journal
+	# from the loaded edits so subsequent saves keep old edits.
+	edit_journal.seed_from_edits(save_data.get("edited_cells", {}))
 	var metadata: Dictionary = save_data["metadata"]
 	var saved_position: Array = metadata.get("player_position", [])
+	var m4_data: Dictionary = metadata.get("m4", {})
+	var buggy_data: Dictionary = m4_data.get("buggy", {})
+	buggy.apply_save_data(buggy_data)
 	if saved_position.size() == 3:
 		player.position = Vector3(saved_position[0], saved_position[1], saved_position[2])
-	var m4_data: Dictionary = metadata.get("m4", {})
+	if bool(buggy_data.get("driving", false)):
+		player.position = buggy.get_exit_position()
 	cycle.restore_time(float(m4_data.get("day_night_elapsed", 0.0)))
 	gloom.restore_from_array(m4_data.get("gloom_levels", []))
 
@@ -66,15 +84,17 @@ func _debug_text() -> String:
 	var draw_calls := int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
 	var generated: int = world.generated_chunk_count
 	var meshed: int = world.meshed_chunk_count
-	var block_total: int = world.blocks.size() if world.is_generated else 0
+	var loaded: int = world.chunk_records.size()
+	var block_total: int = world.loaded_block_count() if world.is_generated else 0
 	var light_cell := Vector3i(floori(player.camera.global_position.x), floori(player.camera.global_position.y), floori(player.camera.global_position.z))
 	var hit: Dictionary = player._voxel_raycast(7.0)
 	if not hit.is_empty():
 		light_cell = hit["previous_air"]
 	var light_level: int = world.get_light_level(light_cell) if world.is_generated else 0
 	var gloom_level := world.get_gloom_level(light_cell)
-	var chunk_index := world._chunk_index(Vector3i(light_cell.x / 16, light_cell.y / 16, light_cell.z / 16))
-	return "LUMENFALL M4 | FPS %d | Draw %d | HP %d | %s | LIGHT %d | GLOOM %.2f\nChunks %d/256 generated, %d/256 meshed, %d/256 lit | blocks %d\nGloom chunk %d | enemies %d | static lights %d | WASD move | 1–4 cartridges | WHEEL cartridges/projector | K save | J load | F3 HUD | F flashlight %s | F6 gloomlings | F7 lamp eater | F8 local gloom" % [Engine.get_frames_per_second(), draw_calls, roundi(player.health), cycle.phase_name.to_upper(), light_level, gloom_level, generated, meshed, world.initialized_light_chunks, block_total, chunk_index, get_tree().get_nodes_in_group("enemies").size(), world.static_light_sources.size(), "ON" if world.flashlight_enabled else "OFF"]
+	var chunk_coords: Vector3i = world._chunk_of(light_cell)
+	var biome_name := BiomeManager.biome_name(world.get_biome_at(light_cell))
+	return "LUMENFALL M4 | FPS %d | Draw %d | HP %d | %s | %s | LIGHT %d | GLOOM %.2f\nChunks %d loaded, %d generated, %d meshed, %d lit | blocks %d\nGloom chunk %s | enemies %d | static lights %d | WASD move | 1–4 cartridges | WHEEL cartridges/projector | K save | J load | F3 HUD | F flashlight %s | F6 gloomlings | F7 lamp eater | F8 local gloom" % [Engine.get_frames_per_second(), draw_calls, roundi(player.health), cycle.phase_name.to_upper(), biome_name, light_level, gloom_level, loaded, generated, meshed, world.initialized_light_chunks, block_total, str(chunk_coords), get_tree().get_nodes_in_group("enemies").size(), world.static_light_sources.size(), "ON" if world.flashlight_enabled else "OFF"]
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:

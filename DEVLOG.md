@@ -966,3 +966,48 @@ M2 isolated verdict: OPEN — automated checks pass; waiting for human visual ac
 ### Next
 
 - The riverbed walls are still very stepped; softening the bank terraces would make the channel read from ground level as well as from the aerial capture.
+
+## 2026-11-18 — Infinite streaming engine and four macro biomes
+
+### Done
+
+- Replaced the fixed 128×128 × 64 world with infinite X/Z streaming. `VoxelWorld` now owns a `chunk_records: Dictionary` keyed by chunk `Vector3i`, each record carrying the chunk node, block volume, revision and modified flag. Streaming radius is 8 with unload at 10 (hysteresis) and a fixed 4-chunk vertical extent (64 blocks).
+- Added a focus-driven scheduler: generation and meshing run on four `WorkerThreadPool` workers, requests are ordered nearest-first from the focus point, and `set_generation_focus(cell)` lets the buggy take over from the player. Light work is capped at 7,000 µs per frame; mesh commits are capped per frame. The 3×3 spawn columns must be generated, lit and meshed before `is_generated` opens the spawn gate.
+- Reworked lighting for streaming: each chunk builds a padded 46³ block volume from its loaded 3×3×3 neighbourhood (Y clamped to 0..3) and runs `LightPropagator` on that volume. There are no global light arrays and no load-order dependency, so light is seamless across chunk boundaries. Meshing snapshots an 18³ block+light+sky halo, builds on a worker, and installs only when the chunk revision still matches.
+- Fixed a catastrophic coordinate bug: `WorldGenerator.generate_chunk` was treating chunk coordinates as block origins. It now multiplies by `CHUNK_SIZE` internally, which removed the phantom terrain, wrong biome sampling and broken collisions. `BiomeManager`, the generator, light and meshing now share one block-space convention.
+- Added `BiomeManager`: static and seed-pure, with domain-warped heat/wet noise, four anchors, normalized `exp(-d²/0.028)` weights, four continuous height functions summed by weight, a deterministic surface dither, sky modes (open / canopy / overcast), a Mire water test, and a spawn lock that forces Ashen inside 150 blocks and blends to the natural field by 240. Macro metrics: 3,417 / 2,228 / 1,918 / 2,638 sample columns, average run 121 blocks, mean adjacent height delta 0.46 (max 10).
+- Implemented the four biomes: Ashen Flats keeps the locked canyon terrain; Hushwoods gets pale trees and mycelium over rotted Ashen soil; Frostfall gets snow over ice and jagged ice spires; The Mire gets dark mud, toxic silt at the waterline and a translucent water plane. Added `frost_snow`, `frost_ice`, `mire_mud` and `toxic_silt` (ids 16–19). The old `hush_soil` lookup did not exist, so Hushwoods had been falling back to Ashen ground; that is fixed and covered by a check.
+- Added the Gameplay Agent contract: `get_biome_at(cell) -> int`, `block_edited(cell, id)` signal (player edits only), `is_chunk_ready(chunk_cell)`, `set_generation_focus(cell)`, `spawn_origin`/`spawn_height`, and floor/posmod-safe `get_surface_height`, `is_solid`, `get_block_id`. Unloaded frontier space reports air to queries but solid to `is_solid`, so the player and buggy cannot fall out of the world.
+- Streaming save support: sparse edited-cell journal keyed by world coordinates, re-applied when a chunk regenerates, with modified chunks surviving unload. Format version 3; older saves are rejected with `World format changed — starting fresh`.
+- Gated the Mire water plane and vegetation rebuilds by biome/distance. The water scan only runs when Mire weight > 0.1; rebuilding it over every Ashen column had caused 100–200 ms main-thread hitches. The worst walk-test frame dropped from ~210 ms to ~89 ms.
+
+### Verified
+
+- `debug/biome_check.gd` passes: all four biomes present, average run 121 blocks, mean height delta 0.46, spawn 100% Ashen, weights sum 1.0000, Mire water present (190 of 6,534 sampled columns).
+- `debug/biome_surface_check.gd` (new; generates chunks with no world and no streaming) passes: Ashen 215/233, Hushwoods 220/256, Frostfall 182/218, Mire 240/256 surface cells on the correct palette, distinct block colours, deterministic chunk bytes.
+- `debug/world_contract_check.gd` passes all six API endpoints, including negative coordinates and the solid unloaded frontier.
+- `debug/streaming_check.gd` passes spawn readiness, chunk determinism, unload/reload, byte-identical regeneration, edits surviving unload, and the sparse save (56 bytes for 2 edited cells).
+- `debug/ashen_flats_check.gd` passes: 735 gravel surface cells, landmark spires 7/7/9, 2,972 of 2,996 canyon floor columns reachable on foot.
+- `debug/world_density_check.gd`, `debug/buggy_check.gd`, M2 roundtrip save/load across separate processes, and a 50-block traversal pass. A 300-frame headless runtime reaches spawn ready with loaded=345–369 and no script errors. Editor import is clean.
+
+### Broken / not verified
+
+- `debug/hollow_check.gd`, `debug/cave_spawn_check.gd` and the capture scripts still call the old fixed-map API and were not migrated.
+- Sprinting through fresh terrain in headless still produces many >20 ms frames; the worst measured frame is ~89 ms. Streaming correctness is verified, frame smoothness is not.
+- All verification is headless; biome look, fog, canopy and water appearance still need a visual playtest.
+
+### Next
+
+- Hand the locked API to the Gameplay Agent for Save/Load, enemy spawning and HUD biome indicators. Migrate the remaining old-API checks and capture scripts, then tune frame pacing.
+
+### Files changed
+
+- `scripts/world/biome_manager.gd` (new), `scripts/world/world.gd`, `scripts/world/world_generator.gd`, `scripts/world/chunk_mesher.gd`, `scripts/world/vegetation.gd`, `scripts/world/water_surface.gd`, `scripts/world/horizon_ridges.gd`, `scripts/world/gloom_manager.gd`, `scripts/world/enemy_director.gd`, `scripts/world/main.gd`
+- `scripts/light/light_propagator.gd`, `scripts/save/save_manager.gd`, `scripts/ui/game_hud.gd`, `scripts/player/player.gd`
+- `data/blocks/frost_snow.tres`, `frost_ice.tres`, `mire_mud.tres`, `toxic_silt.tres`
+- `debug/biome_check.gd`, `debug/biome_surface_check.gd`, `debug/streaming_check.gd`, `debug/world_contract_check.gd`, plus updated `ashen_flats_check`, `world_density_check`, `m1_walk_test`, `m1_roundtrip_test`
+- `STATE.md`, `DEVLOG.md`
+
+### Commit message
+
+`Stream the world infinitely and add four macro biomes`

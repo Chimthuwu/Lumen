@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3]
+[gd_scene load_steps=13 format=3]
 
 [ext_resource type="Script" path="res://scripts/world/main.gd" id="1_main"]
 [ext_resource type="Script" path="res://scripts/world/world.gd" id="2_world"]
@@ -11,6 +11,7 @@
 [ext_resource type="Script" path="res://scripts/player/lumencaster_viewmodel.gd" id="9_viewmodel"]
 [ext_resource type="Script" path="res://scripts/ui/game_hud.gd" id="10_hud"]
 [ext_resource type="Script" path="res://scripts/ui/screen_grade.gd" id="11_grade"]
+[ext_resource type="Script" path="res://scripts/vehicle/dune_buggy.gd" id="12_buggy"]
 
 [node name="Main" type="Node3D"]
 script = ExtResource("1_main")
@@ -33,6 +34,9 @@ position = Vector3(0.36, -0.34, -0.55)
 rotation = Vector3(0.09, 0.26, 0)
 scale = Vector3(0.95, 0.95, 0.95)
 script = ExtResource("9_viewmodel")
+
+[node name="Buggy" type="Node3D" parent="."]
+script = ExtResource("12_buggy")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 rotation = Vector3(-0.785398, -0.610865, 0)

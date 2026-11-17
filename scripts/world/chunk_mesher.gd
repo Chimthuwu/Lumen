@@ -52,9 +52,12 @@ const COOL_LIGHT_TINT := Color(0.40, 0.82, 1.0)
 static func _sky_uv(sky_value: int) -> Vector2:
 	if sky_value <= 0:
 		return Vector2(0.0, 1.0)
-	if sky_value >= 2:
+	if sky_value == 2:
 		# Deep canopy: no sky fill and only a sliver of direct sun.
 		return Vector2(0.0, HUSH_SUN_SHADE)
+	if sky_value == 3:
+		# Overcast: diffuse fill, muted direct sun (Frostfall and The Mire).
+		return Vector2(0.70, 0.50)
 	return Vector2(1.0, 1.0)
 
 

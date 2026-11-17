@@ -6,6 +6,8 @@ const GLOOM_CONFIG: GloomConfig = preload("res://data/world/gloom_config.tres")
 const GloomlingScript = preload("res://scripts/enemies/gloomling.gd")
 const LampEaterScript = preload("res://scripts/enemies/lamp_eater.gd")
 const HollowScript = preload("res://scripts/enemies/hollow.gd")
+const FrostStalkerScript = preload("res://scripts/enemies/frost_stalker.gd")
+const BogCrawlerScript = preload("res://scripts/enemies/bog_crawler.gd")
 
 var world: VoxelWorld
 var gloom: GloomManager
@@ -35,9 +37,14 @@ func _spawn_from_gloom() -> void:
 	var enemies := get_tree().get_nodes_in_group("enemies")
 	if enemies.size() >= CONFIG.max_active_enemies:
 		return
-	var candidates: Array[int] = []
-	for chunk_index in range(world.CHUNK_COUNT):
-		if gloom.levels[chunk_index] < GLOOM_CONFIG.spawn_threshold:
+	# Candidate pool: gloom-dark chunks that are fully ready (generated, lit
+	# and meshed), so a spawn never lands in frontier terrain.
+	var candidates: Array[Vector3i] = []
+	for key in world.chunk_records.keys():
+		var chunk_index: Vector3i = key
+		if not world.is_chunk_ready(chunk_index):
+			continue
+		if float(gloom.levels.get(chunk_index, 0.0)) < GLOOM_CONFIG.spawn_threshold:
 			continue
 		if float(chunk_cooldowns.get(chunk_index, 0.0)) > 0.0:
 			continue
@@ -49,40 +56,53 @@ func _spawn_from_gloom() -> void:
 		var position := _find_spawn_position(chunk_index)
 		if position == Vector3(-1.0, -1.0, -1.0):
 			continue
+		# The population is chosen from the biome at the spawn point itself,
+		# not the player's biome, so border fights spawn the local wildlife.
+		var biome := world.get_biome_at(Vector3i(floori(position.x), 0, floori(position.z)))
 		var hollow_count := 0
 		for existing in enemies:
 			if existing is Hollow:
 				hollow_count += 1
-		var hollow := hollow_count < CONFIG.max_active_hollows and rng.randf() < CONFIG.hollow_spawn_chance
-		var lamp_eater := not hollow and rng.randf() < CONFIG.lamp_eater_spawn_chance
-		var count := 1 if (lamp_eater or hollow) else mini(CONFIG.gloomling_group_size, CONFIG.max_active_enemies - enemies.size())
+		var kind := CONFIG.roll_kind(biome, rng.randf())
+		if kind == EnemyConfig.KIND_HOLLOW and hollow_count >= CONFIG.max_active_hollows:
+			# Cap reached: fall back to the biome's small game instead of
+			# re-rolling, keeping the table deterministic per biome.
+			kind = EnemyConfig.KIND_FROST_STALKER if biome == 2 else EnemyConfig.KIND_GLOOMLING
+		var pack_kind := kind == EnemyConfig.KIND_GLOOMLING or kind == EnemyConfig.KIND_FROST_STALKER
+		var count := mini(CONFIG.gloomling_group_size, CONFIG.max_active_enemies - enemies.size()) if pack_kind else 1
 		for index in range(count):
 			var enemy: GloomEnemy
-			if hollow and index == 0:
-				enemy = HollowScript.new()
-				_configure_hollow(enemy)
-			elif lamp_eater and index == 0:
-				enemy = LampEaterScript.new()
-				_configure_lamp_eater(enemy)
-			else:
-				enemy = GloomlingScript.new()
-				_configure_gloomling(enemy)
+			match kind:
+				EnemyConfig.KIND_LAMP_EATER:
+					enemy = LampEaterScript.new()
+					_configure_lamp_eater(enemy)
+				EnemyConfig.KIND_HOLLOW:
+					enemy = HollowScript.new()
+					_configure_hollow(enemy)
+				EnemyConfig.KIND_FROST_STALKER:
+					enemy = FrostStalkerScript.new()
+					_configure_frost_stalker(enemy)
+				EnemyConfig.KIND_BOG_CRAWLER:
+					enemy = BogCrawlerScript.new()
+					_configure_bog_crawler(enemy)
+				_:
+					enemy = GloomlingScript.new()
+					_configure_gloomling(enemy)
 			# The Hollow is too tall to risk the usual jitter embedding it in
 			# terrain; it spawns exactly on the checked surface cell.
-			var jitter := Vector3.ZERO if hollow else Vector3(rng.randf_range(-1.2, 1.2), 0.0, rng.randf_range(-1.2, 1.2))
+			var jitter := Vector3.ZERO if kind == EnemyConfig.KIND_HOLLOW else Vector3(rng.randf_range(-1.2, 1.2), 0.0, rng.randf_range(-1.2, 1.2))
 			enemy.position = position + jitter
 			get_parent().add_child(enemy)
 		chunk_cooldowns[chunk_index] = CONFIG.spawn_cooldown_seconds
 		return
 
-func _find_spawn_position(chunk_index: int) -> Vector3:
+func _find_spawn_position(chunk_index: Vector3i) -> Vector3:
 	var surface_spawn := _find_surface_spawn_position(chunk_index)
 	if surface_spawn != Vector3(-1.0, -1.0, -1.0):
 		return surface_spawn
 	return _find_cave_spawn_position(chunk_index)
 
-func _find_surface_spawn_position(chunk_index: int) -> Vector3:
-	var coords: Vector3i = world._chunk_coords(chunk_index)
+func _find_surface_spawn_position(coords: Vector3i) -> Vector3:
 	for attempt in range(12):
 		var x := coords.x * 16 + rng.randi_range(1, 14)
 		var z := coords.z * 16 + rng.randi_range(1, 14)
@@ -91,8 +111,7 @@ func _find_surface_spawn_position(chunk_index: int) -> Vector3:
 		var distance := spawn.distance_to(player.position)
 		if distance < CONFIG.min_spawn_distance or distance > CONFIG.max_spawn_distance:
 			continue
-		var surface_chunk := Vector3i(x / 16, floor_y / 16, z / 16)
-		if world._chunk_index(surface_chunk) != chunk_index:
+		if world._chunk_of(Vector3i(x, floor_y, z)) != coords:
 			continue
 		var headroom_clear := true
 		for level in range(1, 4):
@@ -106,8 +125,7 @@ func _find_surface_spawn_position(chunk_index: int) -> Vector3:
 		return spawn
 	return Vector3(-1.0, -1.0, -1.0)
 
-func _find_cave_spawn_position(chunk_index: int) -> Vector3:
-	var coords: Vector3i = world._chunk_coords(chunk_index)
+func _find_cave_spawn_position(coords: Vector3i) -> Vector3:
 	var min_y := coords.y * 16 + 1
 	var max_y := coords.y * 16 + 14
 	for attempt in range(16):
@@ -126,7 +144,7 @@ func _find_cave_spawn_position(chunk_index: int) -> Vector3:
 		var distance := spawn.distance_to(player.position)
 		if distance < CONFIG.min_spawn_distance or distance > CONFIG.max_spawn_distance:
 			continue
-		if world._chunk_index(Vector3i(x / 16, y / 16, z / 16)) != chunk_index:
+		if world._chunk_of(Vector3i(x, y, z)) != coords:
 			continue
 		if _is_visible_from_player(spawn):
 			continue
@@ -134,13 +152,19 @@ func _find_cave_spawn_position(chunk_index: int) -> Vector3:
 	return Vector3(-1.0, -1.0, -1.0)
 
 func debug_spawn_gloomlings(count: int = 3) -> void:
-	_debug_spawn(0, count)
+	_debug_spawn(EnemyConfig.KIND_GLOOMLING, count)
 
 func debug_spawn_lamp_eater() -> void:
-	_debug_spawn(1, 1)
+	_debug_spawn(EnemyConfig.KIND_LAMP_EATER, 1)
 
 func debug_spawn_hollow() -> void:
-	_debug_spawn(2, 1)
+	_debug_spawn(EnemyConfig.KIND_HOLLOW, 1)
+
+func debug_spawn_frost_stalker() -> void:
+	_debug_spawn(EnemyConfig.KIND_FROST_STALKER, 1)
+
+func debug_spawn_bog_crawler() -> void:
+	_debug_spawn(EnemyConfig.KIND_BOG_CRAWLER, 1)
 
 
 func _debug_spawn(kind: int, count: int) -> void:
@@ -155,25 +179,36 @@ func _debug_spawn(kind: int, count: int) -> void:
 			var distance := rng.randf_range(5.0, 8.0)
 			cell_x = floori(player.position.x + cos(angle) * distance)
 			cell_z = floori(player.position.z + sin(angle) * distance)
-			if world._inside_world(Vector3i(cell_x, 0, cell_z)):
+			if world._inside_world(Vector3i(cell_x, 0, cell_z)) and world.is_chunk_loaded_at(Vector3i(cell_x, 20, cell_z)):
 				found_column = true
 				break
 		if not found_column:
 			continue
 		var surface: int = world.get_surface_height(cell_x, cell_z)
-		var enemy: GloomEnemy
-		match kind:
-			2:
-				enemy = HollowScript.new()
-				_configure_hollow(enemy)
-			1:
-				enemy = LampEaterScript.new()
-				_configure_lamp_eater(enemy)
-			_:
-				enemy = GloomlingScript.new()
-				_configure_gloomling(enemy)
+		var enemy: GloomEnemy = _make_enemy(kind)
 		enemy.position = Vector3(cell_x + 0.5, surface + 1.05, cell_z + 0.5)
 		get_parent().add_child(enemy)
+
+
+func _make_enemy(kind: int) -> GloomEnemy:
+	var enemy: GloomEnemy
+	match kind:
+		EnemyConfig.KIND_LAMP_EATER:
+			enemy = LampEaterScript.new()
+			_configure_lamp_eater(enemy)
+		EnemyConfig.KIND_HOLLOW:
+			enemy = HollowScript.new()
+			_configure_hollow(enemy)
+		EnemyConfig.KIND_FROST_STALKER:
+			enemy = FrostStalkerScript.new()
+			_configure_frost_stalker(enemy)
+		EnemyConfig.KIND_BOG_CRAWLER:
+			enemy = BogCrawlerScript.new()
+			_configure_bog_crawler(enemy)
+		_:
+			enemy = GloomlingScript.new()
+			_configure_gloomling(enemy)
+	return enemy
 
 
 func _configure_gloomling(enemy: GloomEnemy) -> void:
@@ -204,6 +239,28 @@ func _configure_hollow(enemy: GloomEnemy) -> void:
 	enemy.attack_range = CONFIG.hollow_attack_range
 	enemy.attack_interval = CONFIG.hollow_attack_interval
 	enemy.dissolve_light_level = 16
+
+
+func _configure_frost_stalker(enemy: GloomEnemy) -> void:
+	enemy.move_speed = CONFIG.frost_stalker_speed
+	enemy.max_health = CONFIG.frost_stalker_health
+	enemy.touch_damage = CONFIG.frost_stalker_damage
+	enemy.attack_range = CONFIG.frost_stalker_attack_range
+	enemy.dissolve_light_level = CONFIG.frost_stalker_dissolve_light
+
+
+func _configure_bog_crawler(enemy: GloomEnemy) -> void:
+	enemy.move_speed = CONFIG.bog_crawler_speed
+	enemy.max_health = CONFIG.bog_crawler_health
+	enemy.touch_damage = CONFIG.bog_crawler_damage
+	enemy.attack_range = CONFIG.bog_crawler_attack_range
+	enemy.dissolve_light_level = 15
+	if enemy is LampEater:
+		enemy.extinguish_distance = CONFIG.bog_crawler_extinguish_distance
+		enemy.extinguish_seconds = CONFIG.bog_crawler_extinguish_seconds
+		enemy.target_radius = CONFIG.bog_crawler_target_radius
+		enemy.target_blocks = CONFIG.lamp_eater_target_blocks
+
 
 func _is_visible_from_player(target: Vector3) -> bool:
 	var start := player.camera.global_position

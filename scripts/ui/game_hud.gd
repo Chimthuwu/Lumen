@@ -31,6 +31,11 @@ var status_label: Label
 var hint_panel: Panel
 var hint_label: Label
 
+var biome_label: Label
+var biome_intro_label: Label
+var biome_intro_time := 0.0
+var last_biome := -1
+
 var pause_overlay: Control
 var pause_buttons: Array[Button] = []
 var paused := false
@@ -44,6 +49,7 @@ func _ready() -> void:
 	if player != null:
 		caster = player.get_node_or_null("Lumencaster") as Lumencaster
 	_build_status()
+	_build_biome()
 	_build_loadout()
 	_build_health()
 	_build_crosshair()
@@ -52,7 +58,7 @@ func _ready() -> void:
 	_update_loadout()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if not is_instance_valid(caster) or not is_instance_valid(player):
 		return
 	_update_loadout()
@@ -60,6 +66,7 @@ func _process(_delta: float) -> void:
 	_update_status()
 	_update_hint()
 	_update_flashlight()
+	_update_biome(delta)
 
 
 # --- Construction -----------------------------------------------------------
@@ -131,6 +138,26 @@ func _build_status() -> void:
 	flashlight_label.position = Vector2(600, 8)
 	flashlight_label.size = Vector2(238, 12)
 	add_child(flashlight_label)
+
+
+func _build_biome() -> void:
+	# Persistent, unobtrusive biome tag under the torch readout, plus a
+	# transient crossing banner. Poll-driven against world.get_biome_at.
+	biome_label = _label("", 10, TEXT_DIM, HORIZONTAL_ALIGNMENT_RIGHT)
+	biome_label.name = "BiomeTag"
+	biome_label.position = Vector2(600, 26)
+	biome_label.size = Vector2(238, 14)
+	biome_label.modulate.a = 0.75
+	add_child(biome_label)
+
+	biome_intro_label = _label("", 17, TEXT_PALE, HORIZONTAL_ALIGNMENT_CENTER)
+	biome_intro_label.name = "BiomeEntering"
+	biome_intro_label.position = Vector2(127, 96)
+	biome_intro_label.size = Vector2(600, 26)
+	biome_intro_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.85))
+	biome_intro_label.add_theme_constant_override("shadow_offset_y", 2)
+	biome_intro_label.visible = false
+	add_child(biome_intro_label)
 
 
 func _build_loadout() -> void:
@@ -318,8 +345,8 @@ func _build_pause() -> void:
 	header.size = Vector2(200, 12)
 	panel.add_child(header)
 
-	var left_controls := ["WASD      Move", "SHIFT     Sprint", "SPACE     Jump", "LMB       Fire", "WHEEL     Cycle cartridge / Projector", "F         Flashlight"]
-	var right_controls := ["1–4       Select cartridge", "WHEEL     Build depth (drag)", "E         Build material", "F3        Debug readout", "K / J     Save / Load", "ESC       Pause"]
+	var left_controls := ["WASD      Move / Drive", "SHIFT     Sprint / Drift", "SPACE     Jump", "LMB       Fire", "WHEEL     Cycle cartridge / Projector", "F         Flashlight"]
+	var right_controls := ["1–4       Select cartridge", "WHEEL     Build depth (drag)", "E         Build / Drive / Exit", "F3        Debug readout", "K / J     Save / Load", "ESC       Pause"]
 	for index in range(left_controls.size()):
 		var left := _label(left_controls[index], 10, TEXT_DIM)
 		left.position = Vector2(24, 92 + index * 18)
@@ -390,6 +417,44 @@ func _update_flashlight() -> void:
 	var on := is_instance_valid(world) and world.flashlight_enabled
 	flashlight_label.text = "TORCH  ON" if on else "TORCH  OFF"
 	flashlight_label.add_theme_color_override("font_color", Color(0.55, 0.92, 0.78) if on else Color(0.42, 0.48, 0.48))
+
+
+const BIOME_ACCENTS := [
+	Color(0.86, 0.72, 0.45), # Ashen Flats
+	Color(0.55, 0.80, 0.62), # Hushwoods
+	Color(0.62, 0.85, 1.00), # Frostfall
+	Color(0.60, 0.80, 0.35), # The Mire
+]
+const BIOME_INTRO_TIME := 3.2
+
+
+func _update_biome(delta: float) -> void:
+	if not is_instance_valid(world) or not world.is_generated:
+		return
+	var cell := Vector3i(floori(player.position.x), 0, floori(player.position.z))
+	var biome := world.get_biome_at(cell)
+	if biome != last_biome:
+		if last_biome >= 0:
+			# Only announce crossings, never the initial read at spawn.
+			biome_intro_label.text = "ENTERING:  %s" % BiomeManager.biome_name(biome).to_upper()
+			biome_intro_time = BIOME_INTRO_TIME
+		last_biome = biome
+		biome_label.text = BiomeManager.biome_name(biome).to_upper()
+		var accent: Color = BIOME_ACCENTS[biome] if biome < BIOME_ACCENTS.size() else TEXT_DIM
+		biome_label.add_theme_color_override("font_color", accent)
+		biome_intro_label.add_theme_color_override("font_color", accent)
+	if biome_intro_time > 0.0:
+		biome_intro_time = maxf(0.0, biome_intro_time - delta)
+		var fade := 1.0
+		var remaining := biome_intro_time
+		if remaining > BIOME_INTRO_TIME - 0.4:
+			fade = (BIOME_INTRO_TIME - remaining) / 0.4
+		elif remaining < 0.8:
+			fade = remaining / 0.8
+		biome_intro_label.visible = true
+		biome_intro_label.modulate.a = clampf(fade, 0.0, 1.0)
+	else:
+		biome_intro_label.visible = false
 
 
 func _update_health() -> void:
