@@ -12,6 +12,7 @@ const SaveSystem = preload("res://scripts/save/save_manager.gd")
 
 var edit_journal := BlockEditJournal.new()
 var debug_visible := false
+var debug_refresh := 0.0
 var pause_due_to_focus := false
 
 func _ready() -> void:
@@ -22,10 +23,13 @@ func _ready() -> void:
 	# Journal every player edit live so the save stays sparse on an infinite map.
 	world.block_edited.connect(edit_journal.on_block_edited)
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if Input.is_action_just_pressed("toggle_debug"):
 		debug_visible = not debug_visible
 		debug_label.visible = debug_visible
+		debug_refresh = 0.0
+		if debug_visible:
+			debug_label.text = _debug_text()
 	if Input.is_action_just_pressed("toggle_flashlight"):
 		world.set_flashlight_enabled(not world.flashlight_enabled)
 	if Input.is_action_just_pressed("save_world"):
@@ -40,7 +44,13 @@ func _process(_delta: float) -> void:
 		if Input.is_action_just_pressed("debug_local_gloom"):
 			var cell := Vector3i(floori(player.camera.global_position.x), floori(player.camera.global_position.y), floori(player.camera.global_position.z))
 			gloom.set_level_for_cell(cell, 1.0)
-	debug_label.text = _debug_text()
+	# The readout includes a voxel raycast, a group query and string formatting.
+	# Only pay for it while the panel is visible, and only four times a second.
+	if debug_visible:
+		debug_refresh += delta
+		if debug_refresh >= 0.25:
+			debug_refresh = 0.0
+			debug_label.text = _debug_text()
 
 func save_game() -> void:
 	if not world.is_generated or not player.spawned:

@@ -53,31 +53,43 @@ func _on_chunk_loaded(coords: Vector3i) -> void:
 func _ensure_sky_stats(coords: Vector3i) -> void:
 	if sky_fraction.has(coords):
 		return
-	var origin := coords * world.CHUNK_SIZE
+	# Read the loaded chunk's own column tops. The previous version called
+	# get_surface_height for all 256 columns, re-running the biome noise stack on
+	# the main thread for every chunk install.
+	var record: Dictionary = world.chunk_records.get(coords, {})
+	if record.is_empty():
+		return
+	var blocks: PackedByteArray = record["blocks"]
+	var side := world.CHUNK_SIZE
 	var sky_cells := 0
-	for z in range(world.CHUNK_SIZE):
-		for x in range(world.CHUNK_SIZE):
-			var surface_y: int = world.get_surface_height(origin.x + x, origin.z + z)
-			sky_cells += clampi(origin.y + world.CHUNK_SIZE - maxi(origin.y, surface_y), 0, world.CHUNK_SIZE)
-	var exposed := float(sky_cells) / float(world.CHUNK_SIZE * world.CHUNK_SIZE * world.CHUNK_SIZE)
+	for z in range(side):
+		for x in range(side):
+			var top := -1
+			for y in range(side - 1, -1, -1):
+				if int(blocks[x + y * side + z * side * side]) != world.air_id:
+					top = y
+					break
+			sky_cells += side - 1 - top
+	var exposed := float(sky_cells) / float(side * side * side)
 	sky_fraction[coords] = exposed
 	underground_fraction[coords] = 1.0 - exposed
 
 
 func _tick_gloom(delta: float) -> void:
+	var player_coords := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	if world.player_camera != null:
+		player_coords = world._chunk_of(Vector3i(
+			floori(world.player_camera.global_position.x),
+			floori(world.player_camera.global_position.y),
+			floori(world.player_camera.global_position.z)))
 	for key in world.chunk_records.keys():
 		var coords: Vector3i = key
 		_ensure_sky_stats(coords)
 		var center := Vector3(coords * world.CHUNK_SIZE) + Vector3.ONE * (world.CHUNK_SIZE * 0.5)
 		var sky_light: float = float(sky_fraction.get(coords, 0.0)) * cycle.ambient_level
 		var dynamic_light := world.get_flashlight_level_at(center)
-		if world.player_camera != null:
-			var player_coords := world._chunk_of(Vector3i(
-				floori(world.player_camera.global_position.x),
-				floori(world.player_camera.global_position.y),
-				floori(world.player_camera.global_position.z)))
-			if player_coords == coords:
-				dynamic_light = maxf(dynamic_light, world.get_flashlight_level_at(world.player_camera.global_position))
+		if player_coords == coords:
+			dynamic_light = maxf(dynamic_light, world.get_flashlight_level_at(world.player_camera.global_position))
 		var light_exposure := maxf(float(lit_fraction.get(coords, 0.0)), maxf(sky_light * (1.0 + CONFIG.daylight_relief), dynamic_light))
 		var previous: float = float(levels.get(coords, 0.0))
 		var value := previous

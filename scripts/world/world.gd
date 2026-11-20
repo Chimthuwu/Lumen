@@ -23,8 +23,14 @@ const SPAWN_READY_COLUMNS := 1
 const MAX_WORKERS := 4
 const MAX_MESH_COMMITS_PER_FRAME := 1
 const MAX_MESH_DISPATCH_PER_FRAME := 1
-const LIGHT_FRAME_BUDGET_USEC := 7000
-const LIGHT_STEP_BATCH := 64
+# Dispatch budget: chunk snapshots (18^3 halo copies) and task submission are
+# main-thread work. Submitting four chunks in one frame cost ~30ms; one mesh
+# task and two generation tasks per frame keeps the pipeline fed without a hitch.
+const MAX_GENERATION_DISPATCH_PER_FRAME := 2
+const MAX_GENERATION_INSTALLS_PER_FRAME := 2
+const GENERATION_INSTALL_BUDGET_USEC := 5000
+const LIGHT_FRAME_BUDGET_USEC := 4000
+const LIGHT_STEP_BATCH := 32
 const FLASHLIGHT_RANGE := 12.0
 const FLASHLIGHT_INNER_COS := 0.94
 const FLASHLIGHT_OUTER_COS := 0.82
@@ -79,7 +85,6 @@ const WaterScript = preload("res://scripts/world/water_surface.gd")
 var chunk_records: Dictionary = {}
 var modified_chunks: Dictionary = {}
 var stream_center := Vector2i(1 << 30, 1 << 30)
-var stream_timer := 0.0
 var vegetation: WorldVegetation
 var water: ToxicWater
 var horizon_ridges: Node3D
@@ -108,6 +113,14 @@ var is_generated := false
 var world_material: ShaderMaterial
 var player_camera: Camera3D
 var slow_frame_streak := 0
+# Per-frame main-thread microseconds for the streaming stages. Diagnostics only;
+# the probe reads it to attribute spikes without a profiler build.
+var perf_usec: Dictionary = {
+	"stream": 0, "vegetation": 0, "water": 0, "generation": 0,
+	"install": 0, "light": 0, "mesh": 0, "commit": 0,
+	"snapshot": 0, "sources": 0, "light_pad": 0, "light_begin": 0,
+	"extinguish": 0, "atmosphere": 0, "flashlight": 0,
+}
 
 # Generation focus (contract endpoint 4): a world cell the streaming queues
 # should chase, published by the buggy while driving.
@@ -120,6 +133,8 @@ var biome_fog_tint := Color(1.0, 1.0, 1.0)
 
 var generation_queue: Array[Vector3i] = []
 var generation_set: Dictionary = {}
+# Finished generation payloads waiting for a main-thread install slot.
+var pending_installs: Array[Vector3i] = []
 var generation_results: Dictionary = {}
 var generation_task_ids := PackedInt64Array([-1, -1, -1, -1])
 var generation_task_chunks: Array[Vector3i] = [INVALID_CHUNK, INVALID_CHUNK, INVALID_CHUNK, INVALID_CHUNK]
@@ -128,6 +143,12 @@ var light_set: Dictionary = {}
 var active_light_coords := INVALID_CHUNK
 var active_light_state: Dictionary = {}
 var has_active_light := false
+# Padded 46^3 volumes are assembled on a worker; copying ~97k bytes on the
+# main thread cost 5-10ms per chunk during streaming.
+var light_pad_task_id := -1
+var light_pad_coords := INVALID_CHUNK
+var light_pad_revision := -1
+var light_pad_result := PackedByteArray()
 var mesh_queue: Array[Vector3i] = []
 var mesh_set: Dictionary = {}
 var mesh_results: Dictionary = {}
@@ -157,6 +178,9 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	if light_pad_task_id != -1:
+		WorkerThreadPool.wait_for_task_completion(light_pad_task_id)
+		light_pad_task_id = -1
 	for slot in range(MAX_WORKERS):
 		if generation_task_ids[slot] != -1:
 			WorkerThreadPool.wait_for_task_completion(generation_task_ids[slot])
@@ -168,16 +192,30 @@ func _exit_tree() -> void:
 
 func _process(delta: float) -> void:
 	_check_slow_frame(delta)
+	var t := Time.get_ticks_usec()
 	_update_biome_atmosphere(delta)
-	stream_timer += delta
-	if stream_timer >= 0.2:
-		stream_timer = 0.0
-		_update_streaming(false)
+	perf_usec["atmosphere"] = Time.get_ticks_usec() - t
+	# Center changes are cheap to detect; the heavy body only runs on a chunk
+	# crossing. Polling per frame removes the old 0.2s lag after a fast jump and
+	# makes streaming independent of frame rate.
+	t = Time.get_ticks_usec()
+	_update_streaming(false)
+	perf_usec["stream"] = Time.get_ticks_usec() - t
+	t = Time.get_ticks_usec()
 	_process_generation()
+	perf_usec["generation"] = Time.get_ticks_usec() - t
+	t = Time.get_ticks_usec()
 	_process_light_updates()
+	perf_usec["light"] = Time.get_ticks_usec() - t
+	t = Time.get_ticks_usec()
 	_process_extinguished_lights(delta)
+	perf_usec["extinguish"] = Time.get_ticks_usec() - t
+	t = Time.get_ticks_usec()
 	_process_mesh_pipeline()
+	perf_usec["mesh"] = Time.get_ticks_usec() - t
+	t = Time.get_ticks_usec()
 	_update_flashlight_uniforms()
+	perf_usec["flashlight"] = Time.get_ticks_usec() - t
 
 
 func _load_block_palette() -> void:
@@ -305,14 +343,18 @@ func _update_streaming(force: bool) -> void:
 					if not chunk_records.has(coords) and not generation_set.has(coords):
 						_queue_generation(coords)
 	_unload_far_chunks(center)
+	var veg_start := Time.get_ticks_usec()
 	vegetation.update_region(world_seed, center * CHUNK_SIZE, 96)
+	perf_usec["vegetation"] = Time.get_ticks_usec() - veg_start
 	# The water scan is only worth paying for near The Mire; rebuilding it over
 	# every Ashen or Frostfall column caused visible main-thread hitches.
 	var center_weights := BiomeManager.get_weights(center.x * CHUNK_SIZE + 8, center.y * CHUNK_SIZE + 8)
+	var water_start := Time.get_ticks_usec()
 	if center_weights[BiomeManager.MIRE] > 0.1:
 		water.update_region(center, 96)
 	else:
 		water.clear()
+	perf_usec["water"] = Time.get_ticks_usec() - water_start
 	if horizon_ridges != null:
 		horizon_ridges.position = Vector3(position.x, 0.0, position.z)
 
@@ -344,7 +386,10 @@ func _pop_nearest_generation() -> Vector3i:
 
 
 func _fill_generation_workers() -> void:
+	var dispatched := 0
 	for slot in range(MAX_WORKERS):
+		if dispatched >= MAX_GENERATION_DISPATCH_PER_FRAME:
+			return
 		if generation_task_ids[slot] != -1:
 			continue
 		var coords := _pop_nearest_generation()
@@ -352,10 +397,15 @@ func _fill_generation_workers() -> void:
 			return
 		generation_task_chunks[slot] = coords
 		generation_task_ids[slot] = WorkerThreadPool.add_task(Callable(self, "_generate_chunk_task").bind(coords))
+		dispatched += 1
 
 
 func _generate_chunk_task(coords: Vector3i) -> void:
+	# modified_chunks is written on the main thread by set_block, so read it
+	# under the same mutex the result handoff uses.
+	worker_mutex.lock()
 	var modifications: PackedByteArray = modified_chunks.get(coords, PackedByteArray())
+	worker_mutex.unlock()
 	var generated := Generator.generate_chunk(coords, world_seed, block_ids, modifications)
 	worker_mutex.lock()
 	generation_results[coords] = generated
@@ -363,23 +413,39 @@ func _generate_chunk_task(coords: Vector3i) -> void:
 
 
 func _process_generation() -> void:
-	for slot in range(MAX_WORKERS):
-		var task_id := generation_task_ids[slot]
-		if task_id == -1 or not WorkerThreadPool.is_task_completed(task_id):
-			continue
-		WorkerThreadPool.wait_for_task_completion(task_id)
-		var coords := generation_task_chunks[slot]
+	var frame_start := Time.get_ticks_usec()
+	var installed := 0
+	var install_total := 0
+	while not pending_installs.is_empty() and installed < MAX_GENERATION_INSTALLS_PER_FRAME:
+		if Time.get_ticks_usec() - frame_start >= GENERATION_INSTALL_BUDGET_USEC:
+			break
+		var coords: Vector3i = pending_installs.pop_front()
+		# The worker owns writes to generation_results; the main thread must
+		# take the same mutex before reading and erasing, or the dictionary can
+		# be rehashed mid-access.
+		worker_mutex.lock()
 		var chunk_data: PackedByteArray = generation_results.get(coords, PackedByteArray())
 		generation_results.erase(coords)
-		generation_task_ids[slot] = -1
-		generation_task_chunks[slot] = INVALID_CHUNK
+		worker_mutex.unlock()
 		if chunk_data.size() != CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE:
 			continue
 		if _column_distance(coords, stream_center) > UNLOAD_RADIUS:
 			continue
 		if chunk_records.has(coords):
 			continue
+		var install_start := Time.get_ticks_usec()
 		_install_chunk(coords, chunk_data)
+		install_total += Time.get_ticks_usec() - install_start
+		installed += 1
+	perf_usec["install"] = install_total
+	for slot in range(MAX_WORKERS):
+		var task_id := generation_task_ids[slot]
+		if task_id == -1 or not WorkerThreadPool.is_task_completed(task_id):
+			continue
+		WorkerThreadPool.wait_for_task_completion(task_id)
+		pending_installs.append(generation_task_chunks[slot])
+		generation_task_ids[slot] = -1
+		generation_task_chunks[slot] = INVALID_CHUNK
 	_fill_generation_workers()
 
 
@@ -532,6 +598,28 @@ func _process_light_updates() -> void:
 	light_updates_last_frame = 0
 	var frame_start_usec := Time.get_ticks_usec()
 	while Time.get_ticks_usec() - frame_start_usec < LIGHT_FRAME_BUDGET_USEC:
+		# Collect an async padded volume first; begin_chunk only needs the result.
+		if light_pad_task_id != -1:
+			if not WorkerThreadPool.is_task_completed(light_pad_task_id):
+				break
+			WorkerThreadPool.wait_for_task_completion(light_pad_task_id)
+			var pad_coords := light_pad_coords
+			var pad_revision := light_pad_revision
+			light_pad_task_id = -1
+			light_pad_coords = INVALID_CHUNK
+			light_pad_revision = -1
+			worker_mutex.lock()
+			var padded := light_pad_result
+			light_pad_result = PackedByteArray()
+			worker_mutex.unlock()
+			var pad_record: Dictionary = chunk_records.get(pad_coords, {})
+			if pad_record.is_empty() or bool(pad_record["light_ready"]) or int(pad_record["revision"]) != pad_revision:
+				continue
+			var begin_start := Time.get_ticks_usec()
+			active_light_state = LightPropagator.begin_chunk(padded, pad_coords, static_light_sources, attenuation, int(block_ids[&"stone"]))
+			perf_usec["light_begin"] = Time.get_ticks_usec() - begin_start
+			active_light_coords = pad_coords
+			has_active_light = true
 		if not has_active_light:
 			var coords := _pop_light()
 			if coords == INVALID_CHUNK:
@@ -542,10 +630,10 @@ func _process_light_updates() -> void:
 			if not _all_neighbors_loaded(coords):
 				# It will be queued again when the missing neighbour installs.
 				continue
-			var padded := _build_padded_blocks(coords)
-			active_light_state = LightPropagator.begin_chunk(padded, coords, static_light_sources, attenuation, int(block_ids[&"stone"]))
-			active_light_coords = coords
-			has_active_light = true
+			var pad_start := Time.get_ticks_usec()
+			_dispatch_light_pad(coords, int(record["revision"]))
+			perf_usec["light_pad"] = Time.get_ticks_usec() - pad_start
+			break
 		if not LightPropagator.advance_chunk(active_light_state, LIGHT_STEP_BATCH):
 			continue
 		var coords := active_light_coords
@@ -576,14 +664,14 @@ func _process_light_updates() -> void:
 	_check_spawn_ready()
 
 
-func _build_padded_blocks(coords: Vector3i) -> PackedByteArray:
-	var padded := PackedByteArray()
-	padded.resize(LightPropagator.PADDED_VOLUME)
-	padded.fill(int(block_ids[&"stone"]))
+# Copies the 27 neighbour block arrays on the main thread (cheap, and safe),
+# then lets a worker assemble the padded volume without touching chunk_records.
+func _dispatch_light_pad(coords: Vector3i, revision: int) -> void:
 	var origin := coords * CHUNK_SIZE - Vector3i(LightPropagator.LIGHT_RANGE, LightPropagator.LIGHT_RANGE, LightPropagator.LIGHT_RANGE)
 	var limit := LightPropagator.PADDED_SIZE
 	var chunk_low := Vector3i(floori(float(origin.x) / CHUNK_SIZE), floori(float(origin.y) / CHUNK_SIZE), floori(float(origin.z) / CHUNK_SIZE))
 	var chunk_high := Vector3i(floori(float(origin.x + limit - 1) / CHUNK_SIZE), floori(float(origin.y + limit - 1) / CHUNK_SIZE), floori(float(origin.z + limit - 1) / CHUNK_SIZE))
+	var snapshots: Dictionary = {}
 	for chunk_z in range(chunk_low.z, chunk_high.z + 1):
 		for chunk_y in range(chunk_low.y, chunk_high.y + 1):
 			for chunk_x in range(chunk_low.x, chunk_high.x + 1):
@@ -591,22 +679,42 @@ func _build_padded_blocks(coords: Vector3i) -> PackedByteArray:
 				var record: Dictionary = chunk_records.get(neighbor, {})
 				if record.is_empty():
 					continue
-				var neighbor_origin := neighbor * CHUNK_SIZE
-				var x_start := maxi(origin.x, neighbor_origin.x)
-				var x_end := mini(origin.x + limit, neighbor_origin.x + CHUNK_SIZE)
-				var y_start := maxi(origin.y, neighbor_origin.y)
-				var y_end := mini(origin.y + limit, neighbor_origin.y + CHUNK_SIZE)
-				var z_start := maxi(origin.z, neighbor_origin.z)
-				var z_end := mini(origin.z + limit, neighbor_origin.z + CHUNK_SIZE)
-				if x_start >= x_end or y_start >= y_end or z_start >= z_end:
-					continue
-				var source_blocks: PackedByteArray = record["blocks"]
-				for world_z in range(z_start, z_end):
-					for world_y in range(y_start, y_end):
-						var source_start := (x_start - neighbor_origin.x) + (world_y - neighbor_origin.y) * CHUNK_SIZE + (world_z - neighbor_origin.z) * CHUNK_SIZE * CHUNK_SIZE
-						var target_start := (x_start - origin.x) + (world_y - origin.y) * limit + (world_z - origin.z) * limit * limit
-						for offset_x in range(x_end - x_start):
-							padded[target_start + offset_x] = source_blocks[source_start + offset_x]
+				snapshots[neighbor] = (record["blocks"] as PackedByteArray).duplicate()
+	light_pad_coords = coords
+	light_pad_revision = revision
+	light_pad_task_id = WorkerThreadPool.add_task(Callable(self, "_build_padded_task").bind(coords, snapshots, int(block_ids[&"stone"])))
+
+
+func _build_padded_task(coords: Vector3i, snapshots: Dictionary, stone_id: int) -> void:
+	var padded := _assemble_padded(coords, snapshots, stone_id)
+	worker_mutex.lock()
+	light_pad_result = padded
+	worker_mutex.unlock()
+
+
+func _assemble_padded(coords: Vector3i, snapshots: Dictionary, stone_id: int) -> PackedByteArray:
+	var padded := PackedByteArray()
+	padded.resize(LightPropagator.PADDED_VOLUME)
+	padded.fill(stone_id)
+	var origin := coords * CHUNK_SIZE - Vector3i(LightPropagator.LIGHT_RANGE, LightPropagator.LIGHT_RANGE, LightPropagator.LIGHT_RANGE)
+	var limit := LightPropagator.PADDED_SIZE
+	for neighbor in snapshots.keys():
+		var neighbor_origin: Vector3i = neighbor * CHUNK_SIZE
+		var x_start := maxi(origin.x, neighbor_origin.x)
+		var x_end := mini(origin.x + limit, neighbor_origin.x + CHUNK_SIZE)
+		var y_start := maxi(origin.y, neighbor_origin.y)
+		var y_end := mini(origin.y + limit, neighbor_origin.y + CHUNK_SIZE)
+		var z_start := maxi(origin.z, neighbor_origin.z)
+		var z_end := mini(origin.z + limit, neighbor_origin.z + CHUNK_SIZE)
+		if x_start >= x_end or y_start >= y_end or z_start >= z_end:
+			continue
+		var source_blocks: PackedByteArray = snapshots[neighbor]
+		for world_z in range(z_start, z_end):
+			for world_y in range(y_start, y_end):
+				var source_start := (x_start - neighbor_origin.x) + (world_y - neighbor_origin.y) * CHUNK_SIZE + (world_z - neighbor_origin.z) * CHUNK_SIZE * CHUNK_SIZE
+				var target_start := (x_start - origin.x) + (world_y - origin.y) * limit + (world_z - origin.z) * limit * limit
+				for offset_x in range(x_end - x_start):
+					padded[target_start + offset_x] = source_blocks[source_start + offset_x]
 	return padded
 
 
@@ -683,6 +791,12 @@ func _process_extinguished_lights(delta: float) -> void:
 func _queue_light_region(cell: Vector3i) -> void:
 	var low := _chunk_of(cell - Vector3i(15, 15, 15))
 	var high := _chunk_of(cell + Vector3i(15, 15, 15))
+	# Invalidate an in-flight padded build that falls inside the affected region;
+	# the block revision check in _process_light_updates will discard it.
+	if light_pad_task_id != -1:
+		var pad := light_pad_coords
+		if pad.x >= low.x and pad.x <= high.x and pad.y >= low.y and pad.y <= high.y and pad.z >= low.z and pad.z <= high.z:
+			light_pad_revision = -1
 	if has_active_light:
 		var active := active_light_coords
 		if active.x >= low.x and active.x <= high.x and active.y >= low.y and active.y <= high.y and active.z >= low.z and active.z <= high.z:
@@ -718,7 +832,10 @@ func _pop_mesh() -> Vector3i:
 
 
 func _fill_mesh_workers() -> void:
+	var dispatched := 0
 	for slot in range(MAX_WORKERS):
+		if dispatched >= MAX_MESH_DISPATCH_PER_FRAME:
+			return
 		if mesh_task_ids[slot] != -1:
 			continue
 		var coords := _pop_mesh()
@@ -730,11 +847,16 @@ func _fill_mesh_workers() -> void:
 		if not _face_neighbors_loaded(coords):
 			continue
 		var revision := int(record["revision"])
+		var snapshot_start := Time.get_ticks_usec()
 		var snapshot := _make_mesh_snapshot(coords)
+		perf_usec["snapshot"] = Time.get_ticks_usec() - snapshot_start
 		mesh_task_chunks[slot] = coords
 		mesh_task_revisions[slot] = revision
+		var sources_start := Time.get_ticks_usec()
 		var chunk_sources := _light_sources_for_chunk(coords)
+		perf_usec["sources"] = Time.get_ticks_usec() - sources_start
 		mesh_task_ids[slot] = WorkerThreadPool.add_task(Callable(self, "_mesh_chunk_task").bind(coords, revision, snapshot["blocks"], snapshot["light"], snapshot["sky"], chunk_sources))
+		dispatched += 1
 
 
 func _mesh_chunk_task(coords: Vector3i, revision: int, block_snapshot: PackedByteArray, light_snapshot: PackedByteArray, sky_snapshot: PackedByteArray, light_sources: Array) -> void:
@@ -752,21 +874,28 @@ func _process_mesh_pipeline() -> void:
 		WorkerThreadPool.wait_for_task_completion(task_id)
 		mesh_task_ids[slot] = -1
 		mesh_task_chunks[slot] = INVALID_CHUNK
-	var commits := 0
+	# Workers insert into mesh_results under worker_mutex; snapshot the entries
+	# we intend to install while holding it, then let the workers keep going.
+	var ready_entries: Array = []
+	worker_mutex.lock()
 	for entry_key in mesh_results.keys():
-		if commits >= MAX_MESH_COMMITS_PER_FRAME:
+		if ready_entries.size() >= MAX_MESH_COMMITS_PER_FRAME:
 			break
-		var coords: Vector3i = entry_key
-		var entry: Dictionary = mesh_results[coords]
-		mesh_results.erase(coords)
+		ready_entries.append([entry_key, mesh_results[entry_key]])
+		mesh_results.erase(entry_key)
+	worker_mutex.unlock()
+	for pair in ready_entries:
+		var coords: Vector3i = pair[0]
+		var entry: Dictionary = pair[1]
 		var record: Dictionary = chunk_records.get(coords, {})
 		if record.is_empty():
 			continue
 		if int(record["revision"]) != int(entry["revision"]):
 			_queue_mesh(coords)
 			continue
+		var commit_start := Time.get_ticks_usec()
 		_apply_mesh_result(coords, entry["mesh"])
-		commits += 1
+		perf_usec["commit"] = Time.get_ticks_usec() - commit_start
 	_fill_mesh_workers()
 
 
@@ -842,21 +971,23 @@ func _make_mesh_snapshot(coords: Vector3i) -> Dictionary:
 							block_snapshot[target_start + offset_x] = source_blocks[source_start + offset_x]
 							if light_ready:
 								light_snapshot[target_start + offset_x] = source_light[source_start + offset_x]
-	# Sky fill only depends on the column. Fill the vertical run above each
-	# surface instead of testing every cell against the heightfield.
+	# Sky fill: only the dominant biome is needed, and the vertical run comes
+	# straight from the copied block snapshot. This avoids 324 full height-blend
+	# evaluations (the old column_info call) on the main thread per snapshot.
 	for z in range(-1, CHUNK_SIZE + 1):
 		for x in range(-1, CHUNK_SIZE + 1):
-			var info := BiomeManager.column_info(origin.x + x, origin.z + z)
-			var sky_value := info.y
+			var sky_value := BiomeManager.sky_mode(origin.x + x, origin.z + z)
 			if sky_value <= 0:
 				continue
-			var first_y := maxi(-1, info.x - origin.y)
-			for y in range(first_y, CHUNK_SIZE + 1):
-				var world_y := origin.y + y
-				if world_y < 0 or world_y >= WORLD_Y:
-					continue
+			var y := CHUNK_SIZE
+			while y >= -1:
 				var snapshot_index := (x + 1) + (y + 1) * 18 + (z + 1) * 18 * 18
-				sky_snapshot[snapshot_index] = sky_value
+				if int(block_snapshot[snapshot_index]) != air_id:
+					break
+				var world_y := origin.y + y
+				if world_y >= 0 and world_y < WORLD_Y:
+					sky_snapshot[snapshot_index] = sky_value
+				y -= 1
 	return {"blocks": block_snapshot, "light": light_snapshot, "sky": sky_snapshot}
 
 
@@ -915,7 +1046,9 @@ func set_block(cell: Vector3i, block_id: int) -> bool:
 	var was_extinguished := extinguished_sources.has(cell)
 	blocks[index] = block_id
 	record["blocks"] = blocks
+	worker_mutex.lock()
 	modified_chunks[coords] = blocks.duplicate()
+	worker_mutex.unlock()
 	if vegetation != null and block_id == air_id and previous_id != air_id:
 		vegetation.hide_tree_at(cell)
 	if extinguished_sources.has(cell):
@@ -1097,7 +1230,12 @@ func restore_save(save_data: Dictionary) -> bool:
 	if metadata.is_empty():
 		return false
 	world_seed = int(metadata.get("seed", world_seed))
+	_stop_workers()
+	if water != null:
+		water.wait_for_pending()
 	modified_chunks = save_data.get("edits", {}).duplicate()
+	# Safe now that no worker is inside a generation task reading the old field
+	# set: BiomeManager is reseeded here, not mid-regeneration.
 	BiomeManager.configure(world_seed)
 	for key in chunk_records.keys():
 		var record: Dictionary = chunk_records[key]
@@ -1107,12 +1245,15 @@ func restore_save(save_data: Dictionary) -> bool:
 	chunk_records.clear()
 	generation_queue.clear()
 	generation_set.clear()
-	generation_results.clear()
+	pending_installs.clear()
 	light_queue.clear()
 	light_set.clear()
 	mesh_queue.clear()
 	mesh_set.clear()
+	worker_mutex.lock()
+	generation_results.clear()
 	mesh_results.clear()
+	worker_mutex.unlock()
 	static_light_sources.clear()
 	has_active_light = false
 	active_light_coords = INVALID_CHUNK
@@ -1125,6 +1266,28 @@ func restore_save(save_data: Dictionary) -> bool:
 	is_generated = false
 	_update_streaming(true)
 	return true
+
+
+# Joins any in-flight worker tasks and drops their slot state. Used by reload
+# before the world seed (and therefore the biome noise fields) changes.
+func _stop_workers() -> void:
+	if light_pad_task_id != -1:
+		WorkerThreadPool.wait_for_task_completion(light_pad_task_id)
+		light_pad_task_id = -1
+		light_pad_coords = INVALID_CHUNK
+		light_pad_revision = -1
+		worker_mutex.lock()
+		light_pad_result = PackedByteArray()
+		worker_mutex.unlock()
+	for slot in range(MAX_WORKERS):
+		if generation_task_ids[slot] != -1:
+			WorkerThreadPool.wait_for_task_completion(generation_task_ids[slot])
+			generation_task_ids[slot] = -1
+			generation_task_chunks[slot] = INVALID_CHUNK
+		if mesh_task_ids[slot] != -1:
+			WorkerThreadPool.wait_for_task_completion(mesh_task_ids[slot])
+			mesh_task_ids[slot] = -1
+			mesh_task_chunks[slot] = INVALID_CHUNK
 
 
 func _log_world_counts() -> void:

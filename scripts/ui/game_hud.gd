@@ -8,6 +8,10 @@ const TEXT_DIM := Color(0.55, 0.72, 0.68)
 const TEXT_WARN := Color(0.98, 0.82, 0.52)
 const ACCENT_PROJECTOR := Color(0.15, 0.90, 1.0)
 const RESERVE_SEGMENTS := 6
+# Every refresh rewrites label text, theme overrides and styleboxes, which
+# forces a Control re-layout/re-draw. At 10 Hz the readouts still feel live and
+# the HUD stops burning main-thread time on frames where nothing changed.
+const HUD_REFRESH_SECONDS := 0.1
 
 var player: VoxelPlayer
 var caster: Lumencaster
@@ -39,6 +43,7 @@ var last_biome := -1
 var pause_overlay: Control
 var pause_buttons: Array[Button] = []
 var paused := false
+var hud_refresh := 0.0
 
 
 func _ready() -> void:
@@ -61,12 +66,17 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if not is_instance_valid(caster) or not is_instance_valid(player):
 		return
+	# The crossing banner fades per frame; the textual/theme work is throttled.
+	_update_biome(delta)
+	hud_refresh += delta
+	if hud_refresh < HUD_REFRESH_SECONDS:
+		return
+	hud_refresh = 0.0
 	_update_loadout()
 	_update_health()
 	_update_status()
 	_update_hint()
 	_update_flashlight()
-	_update_biome(delta)
 
 
 # --- Construction -----------------------------------------------------------
